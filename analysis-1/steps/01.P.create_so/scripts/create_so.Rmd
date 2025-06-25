@@ -1,0 +1,205 @@
+---
+title: "Chikv | Create Seurat 5 object for a sample"
+author: "Giorgio Gonnella"
+date: "2025-06-25"
+output:
+  html_document: default
+params:
+  prjpath: "/srv/immunology/chikv-s5/"
+  analysis: "1"
+  step: "01.P.create_so"
+  sample: NA
+---
+
+```{r setup, echo=FALSE, include=FALSE}
+knitr::opts_chunk$set(message=F, warning=F, echo=F)
+
+library(SingleCellExperiment)
+library(scater)
+library(Seurat)
+library(robustbase)
+
+if (is.na(params$sample)) {
+  stop("Please provide a sample name")
+}
+
+analysis_root <- paste0(params$prjpath, "analysis-", params$analysis,"/")
+
+data_dir <- paste0(params$prjpath, "cellranger/results/")
+sample_data_dir <- paste0(data_dir, params$sample, "/")
+if (!dir.exists(sample_data_dir)) {
+  stop("Sample data directory does not exist: ", sample_data_dir)
+}
+
+this_step_dir <- paste0(analysis_root, "steps/", params$step, "/")
+if (!dir.exists(this_step_dir)) {
+  stop("Current step directory does not exist: ", this_step_dir)
+}
+
+var_dir <- paste0(this_step_dir, "results/vars/")
+dir.create(var_dir, showWarnings = FALSE, recursive = TRUE)
+
+helpers_dir <- paste0(params$prjpath, "helpers/")
+source(paste0(helpers_dir, "qc_helpers.R"))
+```
+
+# Create SO
+
+Create Seurat object from Cellranger raw h5 matrix, in order to identify the
+cells where CHIKV genes are present, then use the filtered matrix to identify
+the other cells and genes to keep, and filter the Seurat object using them, but
+always keeping all infected cells and the CHIKV genes
+
+```{r function_to_extract_counts_of_genes_of_interest}
+GENES_OF_INTEREST = c("CHIKVgp1", "CHIKVgp2")
+
+get_goi_counts <- function(barcodes_of_interest, genes_of_interest, so) {
+  valid_barcodes <- barcodes_of_interest %in% colnames(so)
+  valid_genes <- genes_of_interest %in% rownames(so)
+  if (any(valid_barcodes) & any(valid_genes)) {
+      data_subset <- so[genes_of_interest[valid_genes],
+                        barcodes_of_interest[valid_barcodes]]
+      counts <- as.matrix(GetAssayData(data_subset))
+  } else {
+      counts <- "No matching barcodes or genes found"
+  }
+  counts
+}
+```
+
+```{r create_so_with_raw_data}
+raw_h5fn = paste0(sample_data_dir, "raw_feature_bc_matrix.h5")
+if (!file.exists(raw_h5fn)) {
+  stop("No raw h5 file for sample", params$sample,
+       " found in directory ", sample_data_dir)
+}
+raw_counts <- Read10X_h5(filename = raw_h5fn)
+so_name <- paste0(params$sample, "_so")
+raw_counts_so <- CreateSeuratObject(counts = raw_counts, project = so_name,
+                         min.cells = 0, min.features = 0)
+rm(raw_counts)
+```
+
+```{r identify_cells_with_CHIKV_genes}
+raw_counts_goi_so <- subset(raw_counts_so, features = GENES_OF_INTEREST)
+goi_sums <- Matrix::colSums(GetAssayData(raw_counts_goi_so))
+rm(raw_counts_goi_so)
+
+goi_cells <- names(goi_sums[goi_sums > 0])
+rm(goi_sums)
+```
+
+
+```{r create_so_with_filtered_data}
+filtered_h5fn = paste0(sample_data_dir, "filtered_feature_bc_matrix.h5")
+if (!file.exists(filtered_h5fn)) {
+  stop("No filtered h5 file for sample", params$sample,
+       " found in directory ", sample_data_dir)
+}
+filtered_counts <- Read10X_h5(filename = filtered_h5fn)
+so_name <- paste0(params$sample, "_so")
+so <- CreateSeuratObject(counts = filtered_counts, project = so_name,
+                         min.cells = 0, min.features = 0)
+rm(filtered_counts)
+```
+
+```{r}
+if (length(goi_cells) > 0) {
+  print("Cells with CHIKV genes in the filtered data:")
+  print(get_goi_counts(goi_cells, GENES_OF_INTEREST, so))
+  print("Cells with CHIKV genes in the raw data:")
+  print(get_goi_counts(goi_cells, GENES_OF_INTEREST, raw_counts_so))
+  filtered_cells <- colnames(so)
+  filtered_genes <- rownames(so)
+  all_cells <- union(filtered_cells, goi_cells)
+  all_genes <- union(filtered_genes, GENES_OF_INTEREST)
+  so <- subset(raw_counts_so, cells = all_cells)
+  so <- subset(so, features = all_genes)
+  print("Cells with CHIKV genes of interest in the final data:")
+  print(get_goi_counts(goi_cells, GENES_OF_INTEREST, so))
+}
+
+rm(raw_counts_so)
+so$sample <- params$sample
+so[["infected"]] <- colnames(so) %in% goi_cells
+print(paste0("Created Seurat object for sample: '", params$sample,
+             "' (n_cells: ", ncol(so),")"))
+print(paste0("Number of infected cells: ",
+             sum(so[["infected"]] == TRUE)))
+```
+
+
+# Compute QC measures
+
+## Mitochondrial genes
+
+```{r percent_mito}
+mito_genes <- grep("^MT-", rownames(so@assays$RNA$counts), value = TRUE)
+so <- compute_percent_mito(so, mito_genes)
+```
+
+## QC with scater
+
+```{r qc_scater}
+sce <- SingleCellExperiment(assays = list(counts = so@assays$RNA$counts))
+is.mito <- grepl("^MT-", rownames(sce))
+qcstats <- perCellQCMetrics(sce, subsets=list(Mito=is.mito))
+filt_ad <- data.frame(
+  qc.lib.low = isOutlier(qcstats$sum, log = TRUE, type = "lower"),
+  qc.lib.high = isOutlier(qcstats$sum, log = FALSE, type = "higher", nmads = 4),
+  qc.nexprs.low = isOutlier(qcstats$detected, log = TRUE, type = "lower"),
+  qc.nexprs.high =
+    isOutlier(qcstats$detected, log = FALSE, type = "higher", nmads = 4),
+  qc.mito.high =
+    isOutlier(qcstats$subsets_Mito_percent, log = FALSE, type = "higher")
+)
+qcstats <- cbind(as.data.frame(qcstats), filt_ad)
+# rename sum to scater_qcstats_sum
+colnames(qcstats)[colnames(qcstats) == "sum"] <- "scater_qcstats_sum"
+# rename detected to scater_qcstats_detected
+colnames(qcstats)[colnames(qcstats) == "detected"] <- "scater_qcstats_detected"
+so@meta.data <- cbind(so@meta.data, qcstats)
+```
+
+## QC with robustbase
+
+```{r qc_robustbase}
+set.seed(745)
+stats <- cbind(log10(so$nCount_RNA),
+               log10(so$nFeature_RNA),
+               so$percent.mito)
+outlying <- adjOutlyingness(stats, only.outlyingness = TRUE)
+multi.outlier <- isOutlier(outlying, type = "higher")
+so$multi.outlier <- multi.outlier
+```
+
+## Removing redundant QC information
+
+```{r rm_redundant_qc}
+so@meta.data <- so@meta.data[,c("orig.ident","nCount_RNA","nFeature_RNA",
+                                "scater_qcstats_sum","scater_qcstats_detected",
+                                "subsets_Mito_sum","subsets_Mito_detected",
+                                "percent.mito","percent.mito.cl","qc.lib.low",
+                                "qc.lib.high","qc.nexprs.low","qc.nexprs.high",
+                                "qc.mito.high", "multi.outlier")]
+```
+
+# Cell cycle scoring
+
+```{r cell_cycle_scoring}
+so <- test_cell_cycle_effect(so, so_name,
+                             s_genes = cc.genes.updated.2019$s.genes,
+                             g2m_genes = cc.genes.updated.2019$g2m.genes)
+```
+
+# Saving
+
+```{r saving, echo=T}
+saveRDS(so, paste0(var_dir, params$sample, "_so_initial.rds"))
+```
+
+# Session info
+
+```{r session_info, echo=F}
+sessionInfo()
+```
