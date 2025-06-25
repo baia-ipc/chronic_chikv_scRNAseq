@@ -2,3 +2,12 @@
 .Rhistory
 .RData
 .Ruserdata
+data/
+*.Rdata
+*.rds
+*_files
+*.sw*
+*.knit.md
+rundir/
+._.DS_Store
+.DS_Store
