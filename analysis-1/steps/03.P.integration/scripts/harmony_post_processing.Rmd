@@ -1,0 +1,395 @@
+---
+title: "Chikv | Post-processing after integration"
+author: "Giorgio Gonnella"
+date: 2025-06-26
+output:
+  html_document:
+    theme: sandstone
+params:
+  analysis: "1"
+  step: "03.P.integration"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message=F, warning=F, echo=F)
+withr::with_dir(here::here(), { source("renv/activate.R") })
+
+library(Seurat)
+library(RColorBrewer)
+
+analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
+
+this_step_dir <- paste0(analysis_root, "steps/", params$step, "/")
+if (!dir.exists(this_step_dir)) {
+  stop("Current step directory does not exist: ", this_step_dir)
+}
+
+var_dir <- paste0(this_step_dir, "results/vars/")
+if (!dir.exists(var_dir)) {
+  stop("Variable directory does not exist: ", var_dir)
+}
+```
+
+```{r load, echo=F}
+so <- readRDS(file = paste0(var_dir, "integrated_so.raw.rds"))
+so$clinical_condition = ifelse(so$Chronicity == "True", "Chronic", "Non-Chronic")
+```
+
+# Select clustering resolution
+
+Select the clustering resolution to be used for the downstream analysis.
+
+```{r selected_resolution, echo=TRUE}
+so@misc$sel_res <- "1"
+so@misc$sel_res_col <- paste0("harmsnn_res.", so@misc$sel_res)
+```
+
+# Filters
+
+## Remove uncharacterized cells
+
+```{r remove_unchar}
+so$unchar_ct <-so$pruned.labels_singleR_fine == "unchar"
+so <- subset(so, unchar_ct == FALSE)
+so$unchar_ct <- NULL
+```
+
+## Remove small cell types
+
+Remove cells classified in cell types with less than 10 cells
+
+```{r remove_celltype_outliers, echo=T}
+min_cells_per_celltype <- 10
+celltype_sizes <- table(so$pruned.labels_singleR_fine)
+small_celltypes <- names(celltype_sizes[celltype_sizes < min_cells_per_celltype])
+so$in_small_celltype <-so$pruned.labels_singleR_fine %in% small_celltypes
+so <- subset(so, in_small_celltype == FALSE)
+```
+
+## Remove small clusters
+
+Remove cells clustered in clusters with less than 10 cells
+
+```{r remove_small_clusters, echo=T}
+min_cluster_size = 10
+cluster_sizes <- table(so@meta.data[[so@misc$sel_res_col]])
+small_clusters <-
+  as.integer(names(cluster_sizes[cluster_sizes < min_cluster_size]))
+so$in_small_cluster <-
+  so@meta.data[[so@misc$sel_res_col]] %in% small_clusters
+so <- subset(so, in_small_cluster == FALSE)
+so$in_small_cluster <- NULL
+
+so@meta.data[[so@misc$sel_res_col]] <-
+  droplevels(so@meta.data[[so@misc$sel_res_col]])
+```
+
+# Cell types
+
+## Group and sort fine celltype labels
+
+Create groups of fine celltype labels (CD4, CD8 and others) and sort them in
+a meaningful order
+
+```{r celltype_grps, echo=TRUE}
+so@misc$celltype_grp <- list()
+so@misc$celltype_grp[["B cells"]] <-
+  c("Naive B cells", "Switched memory B cells",
+    "Non-switched memory B cells", "Exhausted B cells", "Plasmablasts")
+so@misc$celltype_grp[["CD4+ T cells"]] <-
+  c("Naive CD4 T cells", "Th1 cells", "Th1/Th17 cells", "Th17 cells",
+    "Th2 cells", "Follicular helper T cells", "T regulatory cells",
+    "Terminal effector CD4 T cells")
+so@misc$celltype_grp[["CD8+ T cells"]] <-
+  c("Naive CD8 T cells", "Central memory CD8 T cells",
+    "Terminal effector CD8 T cells", "Effector memory CD8 T cells")
+so@misc$celltype_grp[["CD4-/CD8- T cells"]] <-
+  c("Gamma-delta T cells", "Vd2 gd T cells",
+    "Non-Vd2 gd T cells", "MAIT cells")
+so@misc$celltype_grp[["NK cells"]] <-
+  c("Natural killer cells")
+so@misc$celltype_grp[["Dendritic cells"]] <-
+  c("Plasmacytoid dendritic cells", "Myeloid dendritic cells")
+so@misc$celltype_grp[["Monocytes"]] <-
+  c("Intermediate monocytes", "Classical monocytes", "Non classical monocytes")
+so@misc$celltype_grp[["Granulocytes"]] <-
+  c("Low-density basophils")
+so@misc$celltype_grp[["Progenitor cells"]] <-
+  c("Progenitor cells")
+
+so$celltype <-
+  factor(so$pruned.labels_singleR_fine,
+         levels = c(so@misc$celltype_grp[["B cells"]],
+                    so@misc$celltype_grp[["CD4+ T cells"]],
+                    so@misc$celltype_grp[["CD8+ T cells"]],
+                    so@misc$celltype_grp[["CD4-/CD8- T cells"]],
+                    so@misc$celltype_grp[["NK cells"]],
+                    so@misc$celltype_grp[["Dendritic cells"]],
+                    so@misc$celltype_grp[["Monocytes"]],
+                    so@misc$celltype_grp[["Granulocytes"]],
+                    so@misc$celltype_grp[["Progenitor cells"]]
+                    ))
+
+so$celltype <- droplevels(so$celltype)
+
+so$cell_group <- NA
+for (group in names(so@misc$celltype_grp)) {
+  so$cell_group <-
+    ifelse(so$celltype %in%
+             so@misc$celltype_grp[[group]],
+           group, so$cell_group)
+}
+
+so@misc$cell_lineage <- list()
+so@misc$cell_lineage[["Lymphoid"]] <-
+  c(so@misc$celltype_grp[["B cells"]],
+    so@misc$celltype_grp[["CD4+ T cells"]],
+    so@misc$celltype_grp[["CD8+ T cells"]],
+    so@misc$celltype_grp[["CD4-/CD8- T cells"]],
+    so@misc$celltype_grp[["NK cells"]])
+so@misc$cell_lineage[["Myeloid"]] <-
+  c(so@misc$celltype_grp[["Dendritic cells"]],
+    so@misc$celltype_grp[["Monocytes"]],
+    so@misc$celltype_grp[["Granulocytes"]])
+so@misc$cell_lineage[["Other"]] <-
+   so@misc$celltype_grp[["Granulocytes"]]
+
+so$cell_lineage <- NA
+for (group in names(so@misc$cell_lineage)) {
+  so$cell_lineage <-
+    ifelse(so$celltype %in% so@misc$cell_lineage[[group]],
+           group, so$cell_lineage)
+}
+```
+
+# Abbreviated fine celltype labels
+
+```{r abbreviate_cell_types, echo=TRUE}
+so@misc$celltype.abbrev <- levels(so$celltype)
+names(so@misc$celltype.abbrev) <- levels(so$celltype)
+
+so@misc$celltype.abbrev[[
+    "Naive CD4 T cells"]] <- "CD4+ Naive"
+so@misc$celltype.abbrev[[
+    "Naive CD8 T cells"]] <- "CD8+ Naive"
+so@misc$celltype.abbrev[[
+    "Naive B cells"]] <- "Naive B"
+so@misc$celltype.abbrev[[
+    "Natural killer cells"]] <- "NK cells"
+so@misc$celltype.abbrev[[
+    "Classical monocytes"]] <- "Class.Monoc."
+so@misc$celltype.abbrev[[
+    "T regulatory cells"]] <- "Tregs"
+so@misc$celltype.abbrev[[
+    "Th1/Th17 cells"]] <- "Th1/Th17"
+so@misc$celltype.abbrev[[
+    "Vd2 gd T cells"]] <- "Vd2 GD"
+so@misc$celltype.abbrev[[
+    "Gamma-delta T cells"]] <- "GD"
+so@misc$celltype.abbrev[[
+    "Th2 cells"]] <- "Th2"
+so@misc$celltype.abbrev[[
+    "Non-Vd2 gd T cells"]] <- "Non-Vd2 GD"
+so@misc$celltype.abbrev[[
+    "Terminal effector CD8 T cells"]] <- "CD8+ TEMRA"
+so@misc$celltype.abbrev[[
+    "Central memory CD8 T cells"]] <- "CD8+ CM"
+so@misc$celltype.abbrev[[
+    "Th17 cells"]] <- "Th17"
+so@misc$celltype.abbrev[[
+    "Follicular helper T cells"]] <- "Tfh"
+so@misc$celltype.abbrev[[
+    "MAIT cells"]] <- "MAIT"
+so@misc$celltype.abbrev[[
+    "Th1 cells"]] <- "Th1"
+so@misc$celltype.abbrev[[
+    "Intermediate monocytes"]] <- "Interm.Monoc."
+so@misc$celltype.abbrev[[
+    "Switched memory B cells"]] <- "Sw.mem.B"
+so@misc$celltype.abbrev[[
+    "Effector memory CD8 T cells"]] <- "CD8+ EM"
+so@misc$celltype.abbrev[[
+    "Non-switched memory B cells"]] <- "Non-sw.mem.B"
+so@misc$celltype.abbrev[[
+    "Myeloid dendritic cells"]] <- "Myel.dendr."
+so@misc$celltype.abbrev[[
+    "Exhausted B cells"]] <- "Exh.B"
+so@misc$celltype.abbrev[[
+    "Terminal effector CD4 T cells"]] <- "CD4+ TEMRA"
+so@misc$celltype.abbrev[[
+    "Non classical monocytes"]] <- "Non-class.Monoc."
+so@misc$celltype.abbrev[[
+    "Plasmacytoid dendritic cells"]] <- "Plasmac.dendr."
+so@misc$celltype.abbrev[[
+    "Progenitor cells"]] <- "Progenitor"
+so@misc$celltype.abbrev[[
+    "Plasmablastas"]] <- "Plasmabl."
+so@misc$celltype.abbrev[[
+    "Low-density basophils"]] <- "Ld Basoph."
+
+so$celltype.abbrev <-
+  factor(as.vector(so@misc$celltype.abbrev[so$celltype]),
+    levels = so@misc$celltype.abbrev[levels(so$celltype)])
+```
+
+# Cell types combined with TimePoint
+
+Create new columns ``celltype.tp`` and ``celltype.abbrev.tp`` that combine the
+cell type and the TimePoint. The order shall be the same of celltype and
+celltype.abbrev with the two TimePoints just after each other ("ct-A", "ct-6m",
+for each celltype "ct"). Also create a column ``cellgroup.tp`` that combines the
+cell group and the TimePoint, with the same order ("cg-A", "cg-6m", for each
+cellgroup "cg"). Also create the ``so@misc$celltype_grp.tp`` list containing
+the cell groups for each of the celltype.tp, similar to `so@misc$celltype_grp`.
+
+```{r}
+so$celltype.tp <- paste0(so$celltype, "-", so$TimePoint)
+so$celltype.tp <- factor(so$celltype.tp,
+  levels = paste0(so@misc$celltype, "-", so$TimePoint),
+  labels = paste0(so@misc$celltype, "-", so$TimePoint))
+
+so$celltype.abbrev.tp <- paste0(so$celltype.abbrev, "-", so$TimePoint)
+so$celltype.abbrev.tp <- factor(so$celltype.abbrev.tp,
+  levels = paste0(so@misc$celltype.abbrev, "-", so$TimePoint),
+  labels = paste0(so@misc$celltype.abbrev, "-", so$TimePoint))
+
+so$cell_group.tp <- paste0(so$cell_group, "-", so$TimePoint)
+so$cell_group.tp <- factor(so$cell_group.tp,
+  levels = paste0(so@misc$cell_group, "-", so$TimePoint),
+  labels = paste0(so@misc$cell_group, "-", so$TimePoint))
+
+so@misc$celltype_grp.tp <- list()
+for (group in names(so@misc$celltype_grp)) {
+  so@misc$celltype_grp.tp[[group]] <-
+    paste0(so@misc$celltype_grp[[group]], "-", so$TimePoint)
+}
+```
+
+# Color schemes
+
+Define color schemes for the main cell type labels, fine cell type labels,
+clinical conditions, samples, clusters and cell cycle phases, in order to have
+consistent colors across all plots.
+
+The colors are saved in some columns of the `so@misc` slot:
+- `mctype_cols` for the main cell type labels
+- `fctype_cols` for the fine cell type labels
+- `cond_cols` for the clinical conditions
+- `sample_cols` for the samples
+- `cluster_cols` for the clusters
+- `phase_cols` for the cell cycle phases
+- `celltype_groups_bkg` for plots background divided by celltype group
+
+```{r color_scheme_for_main_labels}
+so@misc$mctype_cols <-
+  colorRampPalette(brewer.pal(6, "Accent"))(
+    length(unique(so$pruned.labels_singleR_main)))
+names(so@misc$mctype_cols) <-
+  levels(so$pruned.labels_singleR_main)
+```
+
+```{r color_scheme_for_fine_labels}
+so@misc$colors$celltypes <- c(
+  # B cells (shades of blue)
+  "Naive B cells" = "#1f78b4",           # blue
+  "Switched memory B cells" = "#6baed6", # light blue
+  "Non-switched memory B cells" = "#0c61ff", # dark blue/cyan
+  "Exhausted B cells" = "#084594",       # very dark blue
+  "Plasmablasts" = "#9ecae1",            # pale blue
+
+  # CD4+ T cells (shades of green)
+  "Naive CD4 T cells" = "#238b45",       # green
+  "Th1 cells" = "#006d2c",               # dark green
+  "Th1/Th17 cells" = "#74c476",          # light green
+  "Th17 cells" = "#41ab5d",              # medium green
+  "Th2 cells" = "#a1d99b",               # pale green
+  "Follicular helper T cells" = "#31a354", # another shade of green
+  "T regulatory cells" = "#c7ffc0",      # very pale green
+  "Terminal effector CD4 T cells" = "#005a32", # very dark green
+
+  # CD8+ T cells (shades of red)
+  "Naive CD8 T cells" = "#e31a1c",       # red
+  "Central memory CD8 T cells" = "#fc9272", # light red
+  "Effector memory CD8 T cells" = "#fb6a4a",  # medium red
+  "Terminal effector CD8 T cells" = "#66181d", # dark red
+
+  # CD4-/CD8- T cells (shades of purple)
+  "Gamma-delta T cells" = "#6a51a3",    # purple
+  "Vd2 gd T cells" = "#6050aa",         # purple
+  "Non-Vd2 gd T cells" = "#9e9ac8",     # light purple
+  "MAIT cells" = "#4a3183",             # dark purple
+
+  # Natural killer cells (pink)
+  "Natural killer cells" = "#dd3497",    # pink
+
+  # Monocytes (shades of brown)
+  "Classical monocytes" = "#8c510a",     # brown
+  "Intermediate monocytes" = "#4f410d",  # light brown
+  "Non classical monocytes" = "#543005", # dark brown
+
+  # Dendritic cells (shades of orange)
+  "Plasmacytoid dendritic cells" = "#fe9929", # orange
+  "Myeloid dendritic cells" = "#ec7014",      # dark orange
+
+  # Granulocytes (yellow)
+  "Low-density basophils" = "#ffff33",    # bright yellow
+
+  # Progenitor cells (gray)
+  "Progenitor cells" = "#2f2f2f"         # dark gray
+)
+```
+
+```{r color_scheme_for_conditions}
+so@misc$cond_cols <- c(
+  "Non-Chronic" = "darkblue",
+  "Chronic" = "darkred"
+)
+```
+
+```{r color_scheme_for_samples}
+so@misc$sample_cols <-
+  colorRampPalette(brewer.pal(8, name = "Accent"))(
+                  length(unique(so$sample)))
+names(so@misc$sample_cols) <- levels(so$sample)
+```
+
+```{r color_scheme_for_clusters}
+g.b = so@misc$sel_res_col
+so@misc$cluster_cols <-
+  colorRampPalette(brewer.pal(8, name = "Set1"))(
+              length(unique(so@meta.data[[g.b]])))
+names(so@misc$cluster_cols) <-
+  levels(so@meta.data[[g.b]])
+```
+
+```{r color_scheme_for_phases}
+so@misc$phase_cols <- c("#00AFBB", "#E7B800", "#FC4E07")
+names(so@misc$phase_cols) <- c("G1", "G2M", "S")
+```
+
+```{r color_scheme_for_plots_background_divided_by_celltype_group}
+so@misc$colors$celltype_groups_bkg <- c(
+  "B cells" = "#cce5ff",              # Light blue
+  "CD4+ T cells" = "#ddffdd",         # Light green
+  "CD8+ T cells" = "#ffcc99",         # Light orange
+  "CD4-/CD8- T cells" = "#e6ccff",    # Light purple
+  "NK cells" = "#ffe6e6",             # Light pink
+  "Dendritic cells" = "#ffffcc",      # Light yellow
+  "Monocytes" = "#eeff99",            # Light green/yellow
+  "Granulocytes" = "#aabbbb",         # Light gray
+  "Progenitor cells" = "#fdd3d3",     # Light red
+  "Uncharacterized" = "#f0f0f0"       # Light gray
+)
+```
+
+## Saving data
+
+```{r save, echo=TRUE}
+saveRDS(so, paste0(var_dir, "integrated_so.rds"))
+```
+
+## Session info
+
+```{r, echo=F}
+sessionInfo()
+```

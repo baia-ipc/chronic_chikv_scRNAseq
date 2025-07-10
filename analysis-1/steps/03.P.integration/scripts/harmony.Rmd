@@ -1,0 +1,194 @@
+---
+title: "Chikv | Merging and Integration"
+author: "Giorgio Gonnella"
+date: 2025-06-26
+output:
+  html_document:
+    theme: sandstone
+params:
+  analysis: "1"
+  step: "03.P.integration"
+  input_step: "02.P.filter"
+  input_sfx: "_so_filtered.rds"
+  samples_sheet: "metadata/samples.tsv"
+  sample_id_col: "SampleID"
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(message=F, warning=F, echo=F)
+withr::with_dir(here::here(), { source("renv/activate.R") })
+
+library(harmony)
+library(Seurat)
+
+analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
+
+input_step_dir <- paste0(analysis_root, "steps/", params$input_step, "/")
+input_var_dir <- paste0(input_step_dir, "results/vars/")
+
+if (!dir.exists(input_var_dir)) {
+  stop("Input variable directory does not exist: ", input_var_dir)
+}
+
+this_step_dir <- paste0(analysis_root, "steps/", params$step, "/")
+if (!dir.exists(this_step_dir)) {
+  stop("Current step directory does not exist: ", this_step_dir)
+}
+
+var_dir <- paste0(this_step_dir, "results/vars/")
+dir.create(var_dir, showWarnings = FALSE, recursive = TRUE)
+
+samples_sheet <- here::here(params$samples_sheet)
+
+helpers_dir <- here::here("helpers/")
+source(paste0(helpers_dir, "merging_helpers.R"))
+source(paste0(helpers_dir, "clustering_helpers.R"))
+source(paste0(helpers_dir, "samples_sheet.R"))
+```
+
+# Load Seurat Objects
+
+```{r read input data}
+samples_metadata <- read_samples_sheet(samples_sheet,
+                                       params$sample_id_col)
+sampleIDs <- get_sample_IDs(samples_metadata,
+                            column=params$sample_id_col)
+
+so_list = list()
+for (sampleID in sampleIDs) {
+  filename = paste0(input_var_dir, sampleID, params$input_sfx)
+  so_list[[sampleID]] <- readRDS(filename)
+  so_list[[sampleID]]$BatchID <- samples_metadata$BatchID[samples_metadata[[params$sample_id_col]] == sampleID]
+  so_list[[sampleID]]$Chronicity <- samples_metadata$Chronicity[samples_metadata[[params$sample_id_col]] == sampleID]
+  so_list[[sampleID]]$ByCRFs <- samples_metadata$ByCRFs[samples_metadata[[params$sample_id_col]] == sampleID]
+  so_list[[sampleID]]$Age <- samples_metadata$Age[samples_metadata[[params$sample_id_col]] == sampleID]
+  so_list[[sampleID]]$Sex <- samples_metadata$Sex[samples_metadata[[params$sample_id_col]] == sampleID]
+  so_list[[sampleID]]$SequencingYear <- samples_metadata$SequencingYear[samples_metadata[[params$sample_id_col]] == sampleID]
+  so_list[[sampleID]]$sample <- sampleID
+  so_list[[sampleID]]$PatientID <- samples_metadata$PatientID[samples_metadata[[params$sample_id_col]] == sampleID]
+  so_list[[sampleID]]$TimePoint <- samples_metadata$TimePoint[samples_metadata[[params$sample_id_col]] == sampleID]
+  so_list[[sampleID]]$FlowcellID <- samples_metadata$FlowcellID[samples_metadata[[params$sample_id_col]] == sampleID]
+  so_list[[sampleID]]$Lane <- samples_metadata$Lane[samples_metadata[[params$sample_id_col]] == sampleID]
+  so_list[[sampleID]]$RunID <- samples_metadata$RunID[samples_metadata[[params$sample_id_col]] == sampleID]
+}
+```
+
+# Merge objects into a single Seurat object
+
+```{r merge}
+so <- merge(x = so_list[[1]], y = so_list[-1], project = "chikv")
+```
+
+## Normalization
+
+```{r normalization, echo=TRUE}
+so <- NormalizeData(object = so, assay = "RNA")
+```
+
+## Selection of highly variable genes
+
+```{r hvg_selection, echo=TRUE}
+so <- FindVariableFeatures(object = so, assay = "RNA",
+                           nfeatures = 2500, selection.method = "vst")
+```
+
+Removing unwanted source of variation in the highly variable genes
+
+```{r correcting_hvg, echo=TRUE}
+vf <- VariableFeatures(so)
+
+unwanted_tcr <- grep(pattern = "^TR[AB][VC]", vf, value = TRUE)
+unwanted_ig <- c(grep(pattern = "^IG[HLK][VDJ]", vf, value = TRUE),
+              c("IGHM", "IGHD", "IGHE", "IGHA[12]", "IGHG[1234]",
+                "IGKC", "IGLC[1234567]", "AC233755.1"))
+unwanted_mt <- grep(pattern = "^MT", vf, value = TRUE)
+unwanted_ribo <- grep(pattern = "^RP[LS]", vf, value = TRUE)
+unwanted_vf <- c(unwanted_tcr, unwanted_ig, unwanted_mt, unwanted_ribo)
+hvg_corr <- vf[!vf %in% unwanted_vf]
+```
+
+## Scaling data
+
+```{r scaling, echo=TRUE}
+so <- ScaleData(object = so,
+            features = vf,
+            vars.to.regress = c("nCount_RNA", "percent.mito"),
+            assay = "RNA")
+```
+
+## Linear dimension reduction (PCA)
+
+```{r pca, echo=TRUE}
+so <- RunPCA(object = so, features = hvg_corr,
+             npcs = 50, assay = "RNA")
+```
+
+## Non-linear dim reduction (UMAP)
+
+```{r umap_pre, echo=TRUE}
+myDims <- 1:40
+so <- RunUMAP(object = so, dims = myDims,
+              reduction = "pca", reduction.name = "umap")
+```
+
+## Clustering
+
+```{r clustering_pre, echo=TRUE}
+reS <- c(1.0)
+so <- FindNeighbors(object = so, dims = myDims)
+so <- FindClusters(object = so, resolution = reS)
+so <- factor_resolution(so)
+```
+
+# Harmony integration
+
+In the integration step, the Harmony algorithm is used to integrate the data
+from the different samples. It is a method which aims to correct for batch
+effects while preserving the biological signal.
+
+```{r run_harmony, echo = TRUE}
+
+set.seed(42)
+so <- RunHarmony(object = so,
+                group.by.vars=c("orig.ident"),
+                reduction = "pca", reduction.save="harmony")
+```
+
+## UMAP
+
+```{r setting_umap_parameters, echo=TRUE}
+myDims <- 1:40
+```
+
+```{r umap , message=FALSE, warning=FALSE}
+set.seed(42)
+so <- RunUMAP(object = so, dims = myDims,
+              reduction = "harmony", reduction.name = "umapharm")
+```
+
+## Clustering
+
+```{r setting_clustering_parameters, echo = TRUE}
+reS <- c(0.1, 0.5, 1.0, 2.5, 5.0)
+```
+
+```{r clustering, message = FALSE, warning = FALSE, echo = TRUE}
+set.seed(42)
+so <- FindNeighbors(object = so, dims = myDims,
+                    reduction = "harmony", graph.name = "harmsnn")
+so <- FindClusters(object = so, resolution = reS,
+                   graph.name = "harmsnn")
+so <- factor_resolution(so)
+```
+
+# Saving data
+
+```{r save, echo = TRUE}
+saveRDS(so, file = paste0(var_dir, "integrated_so.raw.rds"))
+```
+
+# Session info
+
+```{r session_info}
+sessionInfo()
+```
