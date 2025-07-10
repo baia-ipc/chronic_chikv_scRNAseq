@@ -1,0 +1,294 @@
+---
+title: "Chikv | Pathway analysis visualization | MSigDb"
+author: "Giorgio Gonnella"
+date: 2025-07-09
+output:
+  html_document:
+    theme: sandstone
+params:
+  analysis: "1"
+  input_step: "06.P.compute_pathways"
+  input_rds: "so_w_pathways.MSigDB.rds"
+  this_step: "06.V.pathways_results"
+  #databases: ["GO", "KEGG", "Reactome", "MSigDb", "KEGGMAPS"]
+  databases: ["MSigDb"]
+  #analyses: ["ORA", "GSEA", "GSEALINEPLOTS"]
+  analyses: ["ORA", "GSEA"]
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message=F, warning=F, echo=F)
+withr::with_dir(here::here(), { source("renv/activate.R") })
+
+library(ggplot2)
+library(clusterProfiler)
+library(enrichplot)
+
+analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
+
+input_step_dir <- paste0(analysis_root, "steps/", params$input_step, "/")
+input_var_dir <- paste0(input_step_dir, "results/vars/")
+if (!dir.exists(input_var_dir)) {
+  stop("Input variable directory does not exist: ", input_var_dir)
+}
+
+this_step_dir <- paste0(analysis_root, "steps/", params$this_step, "/")
+if (!dir.exists(this_step_dir)) {
+  stop("Current step directory does not exist: ", this_step_dir)
+}
+
+results_dir <- paste0(this_step_dir, "results/")
+
+helpers_dir <- here::here("helpers/")
+source(paste0(helpers_dir, "pathway_analysis_viz_helpers.R"))
+source(paste0(helpers_dir, "pathway_analysis_comp_helpers.R"))
+```
+
+```{r load_input_data}
+so <- readRDS(file = paste0(input_var_dir, params$input_rds))
+celltypes <- c(unique(as.character(so$celltype)), "Total")
+cond_pairs <- c("A", "M6", "NC", "C")
+cond_pairs_lbl <- c("A.NC_vs_C", "6M.NC_vs_C", "NC.A_vs_6M", "C.A_vs_6M")
+names(cond_pairs_lbl) <- cond_pairs
+```
+
+```{r strsanitize}
+strsanitize <- function(s) {
+  gsub(" ", "_", gsub("[^[:alnum:]]", "_", s))
+}
+```
+
+# Tables
+
+```{r ora_tables}
+if ("ORA" %in% params$analyses) {
+  for (pair in cond_pairs) {
+    for (ct in celltypes) {
+      cts <- strsanitize(ct)
+      pfx <- paste0(cond_pairs_lbl[pair], ".", cts)
+      if ("GO" %in% params$databases) {
+        dirname = paste0(results_dir, cond_pairs_lbl[pair], "/GO/ORA/", cts, "/")
+        if (!is.null(so@misc$ora$GO[[pair]][[ct]])) {
+          dir.create(dirname, showWarnings = FALSE, recursive = TRUE)
+          fname <- paste0(dirname, pfx, ".ORA.GO.tsv")
+          write.table(so@misc$ora$GO[[pair]][[ct]], file = fname,
+                      sep = "\t", row.names = FALSE, quote = FALSE)
+        }
+        if (!is.null(so@misc$ora$GGO[[pair]][[ct]])) {
+          dir.create(dirname, showWarnings = FALSE, recursive = TRUE)
+          fname <- paste0(dirname, pfx, ".ORA.GroupGO.tsv")
+          write.table(so@misc$ora$GGO[[pair]][[ct]], file = fname,
+                      sep = "\t", row.names = FALSE, quote = FALSE)
+        }
+      }
+      if ("KEGG" %in% params$databases) {
+        dirname = paste0(results_dir, cond_pairs_lbl[pair], "/KEGG/ORA/", cts, "/")
+        if (!is.null(so@misc$ora$KEGG[[pair]][[ct]])) {
+          dir.create(dirname, showWarnings = FALSE, recursive = TRUE)
+          fname <- paste0(dirname, pfx, ".ORA.KEGG.tsv")
+          write.table(so@misc$ora$KEGG[[pair]][[ct]], file = fname,
+                      sep = "\t", row.names = FALSE, quote = FALSE)
+        }
+      }
+      if ("Reactome" %in% params$databases) {
+        dirname = paste0(results_dir, cond_pairs_lbl[pair], "/Reactome/ORA/", cts, "/")
+        if (!is.null(so@misc$ora$Reactome[[pair]][[ct]])) {
+          dir.create(dirname, showWarnings = FALSE, recursive = TRUE)
+          fname <- paste0(dirname, pfx, ".ORA.Reactome.tsv")
+          write.table(so@misc$ora$Reactome[[pair]][[ct]], file = fname,
+                      sep = "\t", row.names = FALSE, quote = FALSE)
+        }
+      }
+      if ("MSigDb" %in% params$databases) {
+        dirname = paste0(results_dir, cond_pairs_lbl[pair], "/MSigDb/ORA/", cts, "/")
+        if (!is.null(so@misc$ora$MSigDb[[pair]][[ct]])) {
+          dir.create(dirname, showWarnings = FALSE, recursive = TRUE)
+          fname <- paste0(dirname, pfx, ".ORA.MSigDb.tsv")
+          write.table(so@misc$ora$MSigDb[[pair]][[ct]], file = fname,
+                      sep = "\t", row.names = FALSE, quote = FALSE)
+        }
+      }
+    }
+  }
+}
+```
+
+```{r gsea_tables}
+if ("GSEA" %in% params$analyses) {
+  for (pair in cond_pairs) {
+    for (ct in celltypes) {
+      cts <- strsanitize(ct)
+      pfx <- paste0(cond_pairs_lbl[pair], ".", cts)
+      if ("GO" %in% params$databases) {
+        dirname = paste0(results_dir, cond_pairs_lbl[pair], "/GO/GSEA/", cts, "/")
+        if (!is.null(so@misc$gsea$GO[[pair]][[ct]])) {
+          dir.create(dirname, showWarnings = FALSE, recursive = TRUE)
+          fname <- paste0(dirname, pfx, ".GSEA.GO.tsv")
+          write.table(so@misc$gsea$GO[[pair]][[ct]], file = fname,
+                      sep = "\t", row.names = FALSE, quote = FALSE)
+        }
+      }
+      if ("KEGG" %in% params$databases) {
+        dirname = paste0(results_dir, cond_pairs_lbl[pair], "/KEGG/GSEA/", cts, "/")
+        if (!is.null(so@misc$gsea$KEGG[[pair]][[ct]])) {
+          dir.create(dirname, showWarnings = FALSE, recursive = TRUE)
+          fname <- paste0(dirname, pfx, ".GSEA.KEGG.tsv")
+          write.table(so@misc$gsea$KEGG[[pair]][[ct]], file = fname,
+                      sep = "\t", row.names = FALSE, quote = FALSE)
+        }
+      }
+      if ("Reactome" %in% params$databases) {
+        dirname = paste0(results_dir, cond_pairs_lbl[pair], "/Reactome/GSEA/", cts, "/")
+        if (!is.null(so@misc$gsea$Reactome[[pair]][[ct]])) {
+          dir.create(dirname, showWarnings = FALSE, recursive = TRUE)
+          fname <- paste0(dirname, pfx, ".GSEA.Reactome.tsv")
+          write.table(so@misc$gsea$Reactome[[pair]][[ct]], file = fname,
+                      sep = "\t", row.names = FALSE, quote = FALSE)
+        }
+      }
+      if ("MSigDb" %in% params$databases) {
+        dirname = paste0(results_dir, cond_pairs_lbl[pair], "/MSigDb/GSEA/", cts, "/")
+        if (!is.null(so@misc$gsea$MSigDb[[pair]][[ct]])) {
+          dir.create(dirname, showWarnings = FALSE, recursive = TRUE)
+          fname <- paste0(dirname, pfx, ".GSEA.MSigDb.tsv")
+          write.table(so@misc$gsea$MSigDb[[pair]][[ct]], file = fname,
+                      sep = "\t", row.names = FALSE, quote = FALSE)
+        }
+      }
+    }
+  }
+}
+```
+
+```{r ora_plots}
+if ("ORA" %in% params$analyses) {
+  for (pair in cond_pairs) {
+    for (ct in celltypes) {
+      cts <- strsanitize(ct)
+      pfx <- paste0(cond_pairs_lbl[pair], ".", cts)
+      print(pfx)
+      if (length(so@misc$pval_filt[[pair]][[ct]])) {
+        l2fc_signif_gene_symbols <-
+          so@misc$pval_filt[[pair]][[ct]]$avg_log2FC
+        names(l2fc_signif_gene_symbols) <-
+          rownames(so@misc$pval_filt[[pair]][[ct]])
+        signif_gene_info_entrez_IDs <-
+          get_signif_gene_info_entrez_IDs(so@misc$pval_filt[[pair]][[ct]])
+        l2fc_signif_gene_entrez_IDs <- signif_gene_info_entrez_IDs$avg_log2FC
+        names(l2fc_signif_gene_entrez_IDs) <-
+          rownames(signif_gene_info_entrez_IDs)
+        for (db in c("MSigDb")) {
+          if (db %in% params$databases) {
+            ora_results <- so@misc$ora[[db]][[pair]][[ct]]
+            if (!is.null(ora_results)) {
+              if (nrow(ora_results) > 0) {
+                dirname = paste0(results_dir, cond_pairs_lbl[pair], "/", db,
+                                 "/ORA/", cts, "/plots/")
+                dir.create(dirname, showWarnings = FALSE, recursive = TRUE)
+                ora_allplots(ora_results, l2fc_signif_gene_symbols, dirname, pfx)
+              }
+            }
+          }
+        }
+        for (db in c("GO", "KEGG", "Reactome")) {
+          if (db %in% params$databases) {
+            ora_results <- so@misc$ora[[db]][[pair]][[ct]]
+            if (!is.null(ora_results)) {
+              if (nrow(ora_results) > 0) {
+                dirname = paste0(results_dir, cond_pairs_lbl[pair], "/", db,
+                                 "/ORA/", cts, "/plots/")
+                dir.create(dirname, showWarnings = FALSE, recursive = TRUE)
+                ora_allplots(ora_results, l2fc_signif_gene_entrez_IDs, dirname, pfx)
+              }
+            }
+          }
+        }
+        if ("KEGGMAPS" %in% params$databases) {
+          kegg_results <- so@misc$ora$KEGG[[pair]][[ct]]
+          if (!is.null(kegg_results)) {
+            if (nrow(kegg_results) > 0) {
+              dirname = paste0(results_dir, cond_pairs_lbl[pair],
+                               "/KEGG/ORA/", cts, "/maps/")
+              dir.create(dirname, showWarnings = FALSE, recursive = TRUE)
+              kegg_draw_pathways(kegg_results, l2fc_signif_gene_symbols,
+                                 dirname)
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+```{r gsea_plots}
+if ("GSEA" %in% params$analyses) {
+  for (pair in cond_pairs) {
+    for (ct in celltypes) {
+      cts <- strsanitize(ct)
+      pfx <- paste0(cond_pairs_lbl[pair], ".", strsanitize(ct))
+      print(pfx)
+      sorted_gene_symbols <-
+        get_sorted_gene_symbols(so@misc$all[[pair]][[ct]])
+      sorted_gene_entrez_IDs <-
+        get_sorted_gene_entrez_IDs(so@misc$all[[pair]][[ct]])
+      for (db in c("GO", "MSigDb")) {
+        if (db %in% params$databases) {
+          gsea_results <- so@misc$gsea[[db]][[pair]][[ct]]
+          if (!is.null(gsea_results)) {
+            dirname = paste0(results_dir, cond_pairs_lbl[pair], "/", db,
+                                 "/GSEA/", cts, "/plots/")
+            dir.create(dirname, showWarnings = FALSE, recursive = TRUE)
+            gsea_allplots(gsea_results, sorted_gene_symbols, dirname, pfx,
+                          lineplots = F)
+            if ("GSEALINEPLOTS" %in% params$analyses) {
+              dirname = paste0(results_dir, cond_pairs_lbl[pair], "/", db,
+                               "/GSEA/", cts, "/lineplots/")
+              dir.create(dirname, showWarnings = FALSE, recursive = TRUE)
+              gsea_lineplots(gsea_results, dirname, pfx)
+            }
+          }
+        }
+      }
+      for (db in c("KEGG", "Reactome")) {
+        if (db %in% params$databases) {
+          gsea_results <- so@misc$gsea[[db]][[pair]][[ct]]
+          if (!is.null(gsea_results)) {
+            dirname = paste0(results_dir, cond_pairs_lbl[pair], "/", db,
+                                 "/GSEA/", cts, "/plots/")
+            dir.create(dirname, showWarnings = FALSE, recursive = TRUE)
+            gsea_allplots(gsea_results, sorted_gene_entrez_IDs, dirname, pfx,
+                          lineplots = F)
+            if ("GSEALINEPLOTS" %in% params$analyses) {
+              dirname = paste0(results_dir, cond_pairs_lbl[pair], "/", db,
+                               "/GSEA/", cts, "/lineplots/")
+              dir.create(dirname, showWarnings = FALSE, recursive = TRUE)
+              gsea_lineplots(gsea_results, dirname, pfx)
+            }
+          }
+        }
+      }
+      if ("KEGGMAPS" %in% params$databases) {
+        kegg_results <- so@misc$gsea$KEGG[[pair]][[ct]]
+        l2fc <- so@misc$all[[pair]][[ct]]$avg_log2FC
+        names(l2fc) <- rownames(so@misc$all[[pair]][[ct]])
+        if (!is.null(kegg_results)) {
+          if (nrow(kegg_results) > 0) {
+            dirname = paste0(results_dir, cond_pairs_lbl[pair],
+                             "/KEGG/GSEA/", cts, "/maps/")
+            dir.create(dirname, showWarnings = FALSE, recursive = TRUE)
+            kegg_draw_pathways(kegg_results, l2fc, dirname)
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+# Session info
+
+```{r}
+sessionInfo()
+```
+
