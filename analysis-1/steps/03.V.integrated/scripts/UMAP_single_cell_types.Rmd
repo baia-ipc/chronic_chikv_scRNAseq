@@ -1,0 +1,72 @@
+---
+title: "Chikv | Results after Harmony integration | UMAP highlighting single cell types"
+author: "Giorgio Gonnella"
+date: 2024-06-27
+output:
+  html_document:
+    theme: sandstone
+params:
+  analysis: "1"
+  input_step: "03.P.integration"
+  step: "03.V.integrated"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message=F, warning=F, echo=F)
+withr::with_dir(here::here(), { source("renv/activate.R") })
+
+library(Seurat)
+library(viridis)
+library(ggplot2)
+library(RColorBrewer)
+
+analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
+
+input_step_dir <- paste0(analysis_root, "steps/", params$input_step, "/")
+input_var_dir <- paste0(input_step_dir, "results/vars/")
+if (!dir.exists(input_var_dir)) {
+  stop("Input variable directory does not exist: ", input_var_dir)
+}
+
+this_step_dir <- paste0(analysis_root, "steps/", params$step, "/")
+if (!dir.exists(this_step_dir)) {
+  stop("Current step directory does not exist: ", this_step_dir)
+}
+
+plots_outdir <- paste0(this_step_dir, "results/plots/")
+dir.create(plots_outdir, recursive = T, showWarnings = F)
+tables_outdir <- paste0(this_step_dir, "results/tables/")
+dir.create(tables_outdir, recursive = T, showWarnings = F)
+
+helpers_dir <- here::here("helpers/")
+source(paste0(helpers_dir, "combined_proportion_plot.R"))
+```
+
+```{r load, echo = FALSE}
+so <- readRDS(paste0(input_var_dir, "integrated_so.rds"))
+```
+
+## UMAP
+
+### Single cell types
+
+UMAP highlighting single cell types (singleR fine labels)
+
+```{r single_cell_types_umap, fig.width = 12, fig.height = 6, echo = FALSE}
+for (ct in unique(so$pruned.labels_singleR_fine)) {
+  highl <- WhichCells(so, expression = (pruned.labels_singleR_fine == ct))
+  print(length(highl))
+  print(ct)
+  plt <- DimPlot(so, reduction = "umapharm",
+        cells.highlight = highl, cols.highlight = "darkblue",
+        cols = "grey") +
+    ggtitle(ct) + theme(legend.position = "none")
+  print(plt)
+}
+```
+
+## Session info
+
+```{r, echo=F}
+sessionInfo()
+```
