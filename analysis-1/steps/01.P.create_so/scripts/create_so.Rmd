@@ -13,6 +13,7 @@ params:
 
 ```{r setup, echo=FALSE, include=FALSE}
 knitr::opts_chunk$set(message=F, warning=F, echo=F)
+withr::with_dir(here::here(), { source("renv/activate.R") })
 
 library(SingleCellExperiment)
 library(scater)
@@ -23,9 +24,9 @@ if (is.na(params$sample)) {
   stop("Please provide a sample name")
 }
 
-analysis_root <- paste0(params$prjpath, "analysis-", params$analysis,"/")
+analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
+data_dir <- here::here("cellranger/results/")
 
-data_dir <- paste0(params$prjpath, "cellranger/results/")
 sample_data_dir <- paste0(data_dir, params$sample, "/")
 if (!dir.exists(sample_data_dir)) {
   stop("Sample data directory does not exist: ", sample_data_dir)
@@ -39,7 +40,7 @@ if (!dir.exists(this_step_dir)) {
 var_dir <- paste0(this_step_dir, "results/vars/")
 dir.create(var_dir, showWarnings = FALSE, recursive = TRUE)
 
-helpers_dir <- paste0(params$prjpath, "helpers/")
+helpers_dir <- here::here("helpers/")
 source(paste0(helpers_dir, "qc_helpers.R"))
 ```
 
