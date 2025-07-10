@@ -1,0 +1,162 @@
+---
+title: "Chikv | Pseudobulk DESeq2 analysis"
+author: "Giorgio Gonnella"
+date: 2025-06-27
+output:
+  html_document:
+    theme: sandstone
+params:
+  analysis: "1"
+  step: "05.P.compute_de"
+  input_step: "03.P.integration"
+  input_rds: "integrated_so.rds"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message=F, warning=F, echo=T)
+withr::with_dir(here::here(), { source("renv/activate.R") })
+
+library(Seurat)
+library(dplyr)
+
+analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
+
+input_step_dir <- paste0(analysis_root, "steps/", params$input_step, "/")
+input_var_dir <- paste0(input_step_dir, "results/vars/")
+if (!dir.exists(input_var_dir)) {
+  stop("Input variable directory does not exist: ", input_var_dir)
+}
+
+this_step_dir <- paste0(analysis_root, "steps/", params$step, "/")
+if (!dir.exists(this_step_dir)) {
+  stop("Current step directory does not exist: ", this_step_dir)
+}
+
+var_dir <- paste0(this_step_dir, "results/vars/")
+dir.create(var_dir, showWarnings = FALSE, recursive = TRUE)
+
+helpers_dir <- here::here("helpers/")
+source(paste0(helpers_dir, "de_helpers.R"))
+```
+
+```{r load_input_data}
+so <- readRDS(file = paste0(input_var_dir, params$input_rds))
+so$timepoint <- ifelse(so$TimePoint == "A", "A", "M6")
+```
+
+```{r subsets}
+subset_so <- list()
+subset_so[["A"]]  <- subset(so, timepoint == "A")
+subset_so[["M6"]] <- subset(so, timepoint == "M6")
+subset_so[["NC"]] <- subset(so, clinical_condition == "Non-Chronic")
+subset_so[["C"]]  <- subset(so, clinical_condition == "Chronic")
+```
+
+```{r prepare_results_slot}
+so@misc$de <- list()
+so@misc$de[["A"]]  <- list()
+so@misc$de[["M6"]] <- list()
+so@misc$de[["NC"]] <- list()
+so@misc$de[["C"]]  <- list()
+for (n in names(so@misc$de)) {
+  so@misc$de[[n]]$all <- list()
+  so@misc$de[[n]]$pval_filt <- list()
+}
+```
+
+```{r select_genes}
+so@misc$de_selgenes <- select_genes(so, verbose=T)
+```
+
+```{r prepare_pseudobulk_data}
+pseudo = list()
+cluster_names = list()
+freqs = list()
+clusters_col <- "celltype"
+for (tp in c("A", "M6")) {
+  pseudo[[tp]] <- AggregateExpression(subset_so[[tp]],
+                    assays = "RNA", return.seurat = TRUE,
+                    group.by = c("clinical_condition", "sample", clusters_col))
+  clusters_data <- pseudo[[tp]]@meta.data[[clusters_col]]
+  pseudo[[tp]]$cond.clusters <-
+    paste0(pseudo[[tp]]$clinical_condition, "_", clusters_data)
+}
+for (cc in c("NC", "C")) {
+  pseudo[[cc]] <- AggregateExpression(subset_so[[cc]],
+                    assays = "RNA", return.seurat = TRUE,
+                    group.by = c("timepoint", "sample", clusters_col))
+  clusters_data <- pseudo[[cc]]@meta.data[[clusters_col]]
+  pseudo[[cc]]$cond.clusters <-
+    paste0(pseudo[[cc]]$timepoint, "_", clusters_data)
+}
+for (n in c("A", "M6", "NC", "C")) {
+  Idents(pseudo[[n]]) <- "cond.clusters"
+  cluster_names[[n]] <- unique(clusters_data)
+  freqs[[n]] = table(Idents(pseudo[[n]]))
+}
+```
+
+```{r run_de}
+identpfx.1 <- list()
+identpfx.2 <- list()
+for (tp in c("A", "M6")) {
+  identpfx.1[[tp]] <- "Chronic_"
+  identpfx.2[[tp]] <- "Non-Chronic_"
+}
+for (cc in c("NC", "C")) {
+  identpfx.1[[cc]] <- "A_"
+  identpfx.2[[cc]] <- "M6_"
+}
+for (n in c("A", "M6", "NC", "C")) {
+  for (cluster in cluster_names[[n]]) {
+    ident.1 <- paste0(identpfx.1[[n]], cluster)
+    ident.2 <- paste0(identpfx.2[[n]], cluster)
+    results <- run_pb_deseq2(pseudo[[n]], so@misc$de_selgenes,
+                             ident.1, ident.2, freqs[[n]])
+    so@misc$de[[n]]$all[[cluster]] <- results$all
+    so@misc$de[[n]]$pval_filt[[cluster]] <- results$pval_filt
+  }
+}
+```
+
+```{r prepare_pseudobulk_total_cells}
+pseudo = list()
+for (tp in c("A", "M6")) {
+  pseudo[[tp]] <- AggregateExpression(subset_so[[tp]],
+                    assays = "RNA", return.seurat = TRUE,
+                    group.by = c("clinical_condition", "sample"))
+  Idents(pseudo[[tp]]) <- "clinical_condition"
+}
+for (cc in c("NC", "C")) {
+  pseudo[[cc]] <- AggregateExpression(subset_so[[cc]],
+                    assays = "RNA", return.seurat = TRUE,
+                    group.by = c("timepoint", "sample"))
+  Idents(pseudo[[cc]]) <- "timepoint"
+}
+```
+
+```{r run_de_total_cells}
+cluster = "Total"
+for (tp in c("A", "M6")) {
+  results <- run_pb_deseq2(pseudo[[tp]], so@misc$de_selgenes,
+                           "Chronic", "Non-Chronic")
+  so@misc$de[[tp]]$all[[cluster]] <- results$all
+  so@misc$de[[tp]]$pval_filt[[cluster]] <- results$pval_filt
+}
+for (cc in c("NC", "C")) {
+  results <- run_pb_deseq2(pseudo[[cc]], so@misc$de_selgenes, "A", "M6")
+  so@misc$de[[cc]]$all[[cluster]] <- results$all
+  so@misc$de[[cc]]$pval_filt[[cluster]] <- results$pval_filt
+}
+```
+
+```{r save_results}
+saveRDS(so, paste0(var_dir, "so_w_deseq.rds"))
+```
+
+# Session info
+
+```{r}
+sessionInfo()
+```
+
