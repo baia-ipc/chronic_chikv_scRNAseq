@@ -1,0 +1,238 @@
+---
+title: "Chikv | Statistics and Plots before filtering | Merged"
+author: 'Giorgio Gonnella'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document: default
+params:
+  prjpath: "/srv/immunology/chikv-s5/"
+  analysis: "1"
+  step: "02.V.filtered"
+  input_step: "02.P.filter"
+  input_sfx: "_so_filtered.rds"
+  samples_sheet: "metadata/samples.tsv"
+  sample_id_col: "SampleID"
+---
+
+```{r setup, echo=FALSE, include=FALSE}
+knitr::opts_chunk$set(message=F, warning=F, echo=F)
+withr::with_dir(here::here(), { source("renv/activate.R") })
+
+library(Seurat)
+library(tictoc)
+library(dplyr)
+library(ggbeeswarm)
+library(ggExtra)
+library(matrixStats)
+
+analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
+samples_sheet <- here::here(params$samples_sheet)
+
+input_step_dir <- paste0(analysis_root, "steps/", params$input_step, "/")
+input_var_dir <- paste0(input_step_dir, "results/vars/")
+if (!dir.exists(input_var_dir)) {
+  stop("Input variable directory does not exist: ", input_var_dir)
+}
+
+this_step_dir <- paste0(analysis_root, "steps/", params$step, "/")
+if (!dir.exists(this_step_dir)) {
+  stop("Current step directory does not exist: ", this_step_dir)
+}
+
+helpers_dir <- here::here("helpers/")
+source(paste0(helpers_dir, "samples_sheet.R"))
+source(paste0(helpers_dir, "qc_helpers.R"))
+```
+
+# Load Seurat objects
+
+```{r read input data}
+sampleIDs <- get_sample_IDs(samples_sheet,
+                            column=params$sample_id_col)
+
+so_list = list()
+for (sampleID in sampleIDs) {
+  filename = paste0(input_var_dir, sampleID, params$input_sfx)
+  print(filename)
+  so_list[[sampleID]] <- readRDS(filename)
+}
+```
+
+# Filtering information by sample
+
+```{r, asis=TRUE}
+for (sampleID in sampleIDs) {
+  so <- so_list[[sampleID]]
+  print("")
+  print(paste0("Sample: ", sampleID))
+  print(paste0("nCells before filtering: ", so@misc$qc_filtering$nCells))
+  print(paste0("nCells after filtering: ", ncol(so)))
+  print(paste0("nGenes filter: ",
+               so@misc$qc_filtering$nGenes))
+  print(paste0("nCells failing nGenes filter: ",
+               so@misc$qc_filtering$nCells_failing_nGenes))
+  print(paste0("nUMI filter: ", so@misc$qc_filtering$nUMI))
+  print(paste0("nCells failing nUMIs filter: ",
+                so@misc$qc_filtering$nCells_failing_nUMIs))
+  print(paste0("nMito filter: ", so@misc$qc_filtering$pmito))
+  print(paste0("nCells failing pmito filter: ",
+                so@misc$qc_filtering$nCells_failing_pmito))
+  print(paste0("nCells failing multi-outliers filter: ",
+                so@misc$qc_filtering$nCells_failing_multi_outliers))
+  print(paste0("multi-outliers filter applied: ",
+                so@misc$qc_filtering$multi_outliers_applied))
+  print(paste0("nCells failing celltype filter: ",
+                so@misc$qc_filtering$nCells_failing_SingleR))
+  print("")
+}
+```
+
+```{r, asis=TRUE}
+for (sampleID in sampleIDs) {
+  so <- so_list[[sampleID]]
+  print("")
+  print("celltypes main after celltype filter:")
+  print(table(so$pruned.labels_singleR_main))
+  print("celltypes fine after celltype filter:")
+  print(table(so$pruned.labels_singleR_fine))
+  print("")
+  print("")
+}
+```
+
+# Merge objects into a single Seurat object
+
+```{r merge}
+so_merged <- merge(x = so_list[[1]], y = so_list[-1], project = "chikv")
+so_merged$sample <- gsub("_so", "", so_merged$orig.ident)
+so_merged$mitoRatio = so_merged$percent.mito / 100
+so_merged$log10GenesPerUMI <- log10(so_merged$nFeature_RNA) / log10(so_merged$nCount_RNA)
+table(so_merged$sample)
+summary(so_merged@meta.data)
+```
+
+# QC Plots after filtering
+
+## Plots for all samples
+
+```{r plots}
+histogram_n_cells(so_merged)
+so_merged@meta.data %>% group_by(sample) %>% summarise(n_cells = n())
+print(density_plot_n_umis(so_merged, 7))
+print(boxplot_n_umis(so_merged))
+print(density_plot_n_genes(so_merged, 7))
+print(boxplot_n_genes(so_merged))
+print(density_plot_mito_ratio(so_merged, 7))
+print(dotplot_n_umis_genes_mito(so_merged, 7))
+print(density_plot_complexity(so_merged, 7))
+```
+## Plots divided by sample
+
+```{r highest expressed genes}
+for (sampleID in sampleIDs) {
+  plot_highest_expressed(so_list[[sampleID]])
+}
+```
+
+```{r}
+for (sampleID in sampleIDs) {
+  so_list[[sampleID]]@misc$nGene_th <-
+    c(attr(so_list[[sampleID]]@meta.data$qc.nexprs.low, "thresholds")["lower"],
+      attr(so_list[[sampleID]]@meta.data$qc.nexprs.high, "thresholds")["higher"])
+  so_list[[sampleID]]@misc$nUMI_th <-
+    c(attr(so_list[[sampleID]]@meta.data$qc.lib.low, "thresholds")["lower"],
+      attr(so_list[[sampleID]]@meta.data$qc.lib.high, "thresholds")["higher"])
+  so_list[[sampleID]]@misc$nMito_th <-
+    attr(so_list[[sampleID]]@meta.data$qc.mito.high, "thresholds")["higher"]
+}
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=5}
+for (sampleID in sampleIDs) {
+  so <- so_list[[sampleID]]
+  qcstats <- so@meta.data
+  nGene_th <- so_list[[sampleID]]@misc$nGene_th
+  nUMI_th <- so_list[[sampleID]]@misc$nUMI_th
+  nMito_th <- so_list[[sampleID]]@misc$nMito_th
+
+  pmito <- ggplot(qcstats, aes(x = "", y = percent.mito*100))+
+     geom_quasirandom(width = .4, aes(color = qc.mito.high), alpha = .7)+
+     geom_violin(draw_quantiles = .5, fill = NA, color = "black", width = .4)+
+     theme_minimal()+
+     scale_color_manual(values = c("steelblue2", "tan2"))+
+     guides(color=FALSE)+
+     geom_hline(yintercept = nMito_th[["higher"]], linetype ="dashed")+
+     xlab('') + ggtitle(paste0("Sample: ", sampleID))
+  
+  pumi <- ggplot(qcstats, aes(x = "", y = scater_qcstats_sum))+
+     geom_quasirandom(width = .4,aes(color = qc.lib.low | qc.lib.high), alpha = .7)+
+     geom_violin(draw_quantiles = .5, fill = NA, color = "black", width = .4)+
+     theme_minimal()+
+     scale_color_manual(values = c("steelblue2", "tan2"))+
+     guides(color=FALSE)+
+     geom_hline(yintercept = c(nUMI_th[["lower"]], nUMI_th[["higher"]]),
+                linetype ="dashed")+
+     xlab('') + ggtitle(paste0("Sample: ", sampleID))
+  
+  pgene <- ggplot(qcstats, aes(x = "", y = scater_qcstats_detected))+
+     geom_quasirandom(width = .4, aes(color = qc.nexprs.low | qc.nexprs.high), alpha = .7)+
+     geom_violin(draw_quantiles = .5, fill = NA, color = "black", width = .4)+
+     theme_minimal()+
+     scale_color_manual(values = c("steelblue2", "tan2"))+
+     guides(color=FALSE)+
+     geom_hline(yintercept = c(nGene_th[["lower"]], nGene_th[["higher"]]),
+                linetype ="dashed")+
+     xlab('') + ggtitle(paste0("Sample: ", sampleID))
+  
+  grid.arrange(pmito, pumi, pgene, ncol = 3)
+}
+```
+
+```{r, fig.align="center"}
+for (sampleID in sampleIDs) {
+  so <- so_list[[sampleID]]
+  qcstats <- so@meta.data
+  plt <- ggplot(qcstats,aes(x = scater_qcstats_sum, y = percent.mito*100, color = qc.mito.high))+
+     geom_point(alpha = .7)+
+     scale_color_manual(values = c("steelblue2", "tan2"))+
+     guides(color=FALSE)+
+     theme_minimal()+
+     geom_vline(xintercept = c(500, 1000), linetype = "dashed", color = "firebrick2")+
+     geom_hline(yintercept = 10, linetype = "dashed") + ggtitle(paste0("Sample: ", sampleID))
+  print(plt)
+}
+```
+```{r}
+for (sampleID in sampleIDs) {
+  so <- so_list[[sampleID]]
+  p_nUMI_mito <- ggplot(so@meta.data, aes(x = nCount_RNA, y = percent.mito, fill = percent.mito.cl))+
+    geom_point(alpha = .6, color = "grey25", shape = 21) +
+    theme_minimal() +
+    scale_fill_viridis_d() +
+    geom_vline(xintercept = c(1000, 5000), linetype = "dashed") +
+    scale_x_continuous(breaks = seq(from = 0, to = 1e5, by = 1e4)) +
+    geom_hline(yintercept = .1, linetype = "dashed") +
+    ggtitle(paste0("Sample: ", sampleID))
+  print(ggMarginal(p_nUMI_mito, type = "density"))
+}
+```
+
+```{r}
+for (sampleID in sampleIDs) {
+  so <- so_list[[sampleID]]
+  qcstats <- so@meta.data
+  so@meta.data$umiSum.mito <- qcstats$subsets_Mito_sum
+  p <- ggplot(so@meta.data, aes(x = nCount_RNA, y = umiSum.mito, fill = percent.mito.cl)) +
+    geom_point(alpha = .6, color = "grey25", shape = 21) +
+    theme_minimal() +
+    scale_fill_viridis_d() +
+    ggtitle(paste0("Sample: ", sampleID))
+  grid.arrange(p, p+facet_wrap(~percent.mito.cl, ncol = 2), ncol=2)
+}
+```
+
+# Session info
+
+```{r session_info, echo=F}
+sessionInfo()
+```
