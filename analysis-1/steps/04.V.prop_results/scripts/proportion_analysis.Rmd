@@ -1,0 +1,154 @@
+---
+title: "Chikv | Results after Harmony integration | Cell proportion analyses"
+author: "Giorgio Gonnella"
+date: 2024-06-27
+output:
+  html_document:
+    theme: sandstone
+params:
+  analysis: "1"
+  input_step: "04.P.prop_test"
+  input_rds: "integrated_so.rds"
+  step: "04.V.prop_results"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message=F, warning=F, echo=F)
+withr::with_dir(here::here(), { source("renv/activate.R") })
+
+library(Seurat)
+library(viridis)
+library(ggplot2)
+library(RColorBrewer)
+
+analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
+
+input_step_dir <- paste0(analysis_root, "steps/", params$input_step, "/")
+input_var_dir <- paste0(input_step_dir, "results/vars/")
+if (!dir.exists(input_var_dir)) {
+  stop("Input variable directory does not exist: ", input_var_dir)
+}
+
+this_step_dir <- paste0(analysis_root, "steps/", params$step, "/")
+if (!dir.exists(this_step_dir)) {
+  stop("Current step directory does not exist: ", this_step_dir)
+}
+
+plots_outdir <- paste0(this_step_dir, "results/plots/")
+dir.create(plots_outdir, recursive = T, showWarnings = F)
+tables_outdir <- paste0(this_step_dir, "results/tables/")
+dir.create(tables_outdir, recursive = T, showWarnings = F)
+
+helpers_dir <- here::here("helpers/")
+source(paste0(helpers_dir, "combined_proportion_plot.R"))
+```
+
+```{r load, echo = FALSE}
+so <- readRDS(paste0(input_var_dir, params$input_rds))
+```
+
+```{r subset_so_by_timepoint, echo=TRUE}
+subset_so <- list()
+subset_so[["A"]] <- subset(so, TimePoint == "A")
+subset_so[["6m"]] <- subset(so, TimePoint == "6m")
+subset_so[["NC"]] <- subset(so, clinical_condition == "Non-Chronic")
+subset_so[["C"]] <- subset(so, clinical_condition == "Chronic")
+```
+
+# Proportion tests
+
+## Proportion tests for A and 6m timepoints
+
+Non-Chronic vs Chronic
+
+```{r tp_proportion_test_results, echo=TRUE, fig.width=14, fig.height=8}
+for (cs in c("all", names(so@misc$cell_subsets))) {
+  for (tp in c("A", "6m")) {
+    sso <- subset_so[[tp]]
+    if (cs %in% names(so@misc$cell_subsets)) {
+      sso <- subset(sso, cell_group %in% so@misc$cell_subsets[[cs]])
+    }
+    title = paste0("Proportion test in ", tp, " timepoint, NC vs C, subsets of: ", cs)
+    plt <- grouped_combined_permutation_test_plot(
+                sso, so@misc$proptest[[tp]][[cs]],
+                "celltype.abbrev", "cell_group",
+                "clinical_condition", "Clinical Condition",
+                so@misc$cond_cols,
+                so@misc$colors$celltype_groups_bkg,
+                barplot_log_scale = T)
+    plt <- plt + ggtitle(title) + theme(plot.title = element_text(hjust = 0.5, size = 16))
+    fname <- paste0(plots_outdir, tp, ".singleR_proportion_test.", cs ,".svg")
+    ggsave(fname, plot = plt, device = "svg")
+    print(plt)
+  }
+}
+```
+
+```{r tp_proportion_test_results_table, echo=TRUE, results='asis'}
+for (cs in c("all", names(so@misc$cell_subsets))) {
+  for (tp in c("A", "6m")) {
+    sso <- subset_so[[tp]]
+    if (cs %in% names(so@misc$cell_subsets)) {
+      sso <- subset(sso, cell_group %in% so@misc$cell_subsets[[cs]])
+    }
+    title = paste0("Proportion test in ", tp, " timepoint, NC vs C, subsets of: ", cs)
+    print(title)
+    results <- so@misc$proptest[[tp]][[cs]]@results$permutation
+    write.table(results,
+      file = paste0(tables_outdir, tp, ".singleR_proportion_test.", cs, ".tsv"),
+      sep = "\t", row.names = F)
+    print(knitr::kable(results))
+  }
+}
+```
+
+## Proportion tests for NC and C conditions
+
+Acute vs 6 months
+
+```{r cc_proportion_test_results, echo=TRUE, fig.width=14, fig.height=8}
+for (cs in c("all", names(so@misc$cell_subsets))) {
+  for (cc in c("NC", "C")) {
+    sso <- subset_so[[cc]]
+    if (cs %in% names(so@misc$cell_subsets)) {
+      sso <- subset(sso, cell_group %in% so@misc$cell_subsets[[cs]])
+    }
+    title = paste0("Proportions test in ", cc, ", A vs 6M, subsets of: ", cs)
+    plt <- grouped_combined_permutation_test_plot(
+                sso, so@misc$proptest[[cc]][[cs]],
+                "celltype.abbrev", "cell_group",
+                "TimePoint", "Timepoint",
+                so@misc$cond_cols,
+                so@misc$colors$celltype_groups_bkg,
+                barplot_log_scale = T)
+    plt <- plt + ggtitle(title) + theme(plot.title = element_text(hjust = 0.5, size = 16))
+    fname <- paste0(plots_outdir, cc, ".singleR_proportion_test.", cs ,".svg")
+    ggsave(fname, plot = plt, device = "svg")
+    print(plt)
+  }
+}
+```
+
+```{r cc_proportion_test_table, echo=TRUE, results='asis'}
+for (cs in c("all", names(so@misc$cell_subsets))) {
+  for (cc in c("NC", "C")) {
+    sso <- subset_so[[cc]]
+    if (cs %in% names(so@misc$cell_subsets)) {
+      sso <- subset(sso, cell_group %in% so@misc$cell_subsets[[cs]])
+    }
+    title = paste0("Proportions test in ", cc, ", A vs 6M, subsets of: ", cs)
+    print(title)
+    results <- so@misc$proptest[[cc]][[cs]]@results$permutation
+    write.table(results,
+      file = paste0(tables_outdir, cc, ".singleR_proportion_test.", cs, ".tsv"),
+      sep = "\t", row.names = F)
+    print(knitr::kable(results))
+  }
+}
+```
+
+## Session info
+
+```{r, echo=F}
+sessionInfo()
+```
