@@ -1,0 +1,161 @@
+---
+title: "Chikv | Statistics and Plots before filtering"
+author: "Giorgio Gonnella"
+date: "2025-06-25"
+output:
+  html_document: default
+params:
+  analysis: "1"
+  step: "01.V.unfiltered"
+  input_step: "01.P.create_so"
+  sample: NA
+---
+
+```{r setup, echo=FALSE, include=FALSE}
+knitr::opts_chunk$set(message=F, warning=F, echo=F)
+withr::with_dir(here::here(), { source("renv/activate.R") })
+
+library(Seurat)
+library(ggplot2)
+library(ggExtra)
+library(grid)
+library(scater)
+library(gplots)
+library(DT)
+library(ggbeeswarm)
+library(parallel)
+library(robustbase)
+library(viridis)
+
+if (is.na(params$sample)) {
+  stop("Please provide a sample name")
+}
+
+analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
+
+input_step_dir <- paste0(analysis_root, "steps/", params$input_step, "/")
+input_var_dir <- paste0(input_step_dir, "results/vars/")
+if (!dir.exists(input_var_dir)) {
+  stop("Input variable directory does not exist: ", input_var_dir)
+}
+
+this_step_dir <- paste0(analysis_root, "steps/", params$step, "/")
+if (!dir.exists(this_step_dir)) {
+  stop("Current step directory does not exist: ", this_step_dir)
+}
+
+plots_dir <- paste0(this_step_dir, "results/plots/")
+dir.create(plots_dir, showWarnings = F, recursive = T)
+
+helpers_dir <- here::here("helpers/")
+source(paste0(helpers_dir, "qc_helpers.R"))
+```
+
+# Load Seurat object
+
+```{r load_so}
+so <- readRDS(paste0(input_var_dir, params$sample, "_so_initial.rds"))
+```
+
+# Summary
+
+```{r}
+so
+```
+
+## Metadata
+
+```{r}
+summary(so@meta.data)
+```
+
+# Highest expressed genes
+
+```{r, fig.align="center", fig.width=10, fig.height=6, message=FALSE, warning=FALSE, echo=FALSE}
+plot_higest_expressed(so)
+```
+
+# Basic stats
+
+```{r, echo=T}
+nGene_th <- c(attr(so@meta.data$qc.nexprs.low, "thresholds")["lower"],
+              attr(so@meta.data$qc.nexprs.high, "thresholds")["higher"])
+nUMI_th <- c(attr(so@meta.data$qc.lib.low, "thresholds")["lower"],
+             attr(so@meta.data$qc.lib.high, "thresholds")["higher"])
+nMito_th <- attr(so@meta.data$qc.mito.high, "thresholds")["higher"]
+
+nGene_th
+nUMI_th
+nMito_th
+```
+
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=5}
+qcstats <- so@meta.data
+
+pmito <- ggplot(qcstats, aes(x = "", y = percent.mito*100))+
+   geom_quasirandom(width = .4, aes(color = qc.mito.high), alpha = .7)+
+   geom_violin(draw_quantiles = .5, fill = NA, color = "black", width = .4)+
+   theme_minimal()+
+   scale_color_manual(values = c("steelblue2", "tan2"))+
+   guides(color=FALSE)+
+   geom_hline(yintercept = nMito_th[["higher"]], linetype ="dashed")+
+   xlab('')
+
+pumi <- ggplot(qcstats, aes(x = "", y = scater_qcstats_sum))+
+   geom_quasirandom(width = .4,aes(color = qc.lib.low | qc.lib.high), alpha = .7)+
+   geom_violin(draw_quantiles = .5, fill = NA, color = "black", width = .4)+
+   theme_minimal()+
+   scale_color_manual(values = c("steelblue2", "tan2"))+
+   guides(color=FALSE)+
+   geom_hline(yintercept = c(nUMI_th[["lower"]], nUMI_th[["higher"]]),
+              linetype ="dashed")+
+   xlab('')
+
+pgene <- ggplot(qcstats, aes(x = "", y = scater_qcstats_detected))+
+   geom_quasirandom(width = .4, aes(color = qc.nexprs.low | qc.nexprs.high), alpha = .7)+
+   geom_violin(draw_quantiles = .5, fill = NA, color = "black", width = .4)+
+   theme_minimal()+
+   scale_color_manual(values = c("steelblue2", "tan2"))+
+   guides(color=FALSE)+
+   geom_hline(yintercept = c(nGene_th[["lower"]], nGene_th[["higher"]]),
+              linetype ="dashed")+
+   xlab('')
+
+grid.arrange(pmito, pumi, pgene, ncol = 3)
+```
+
+```{r, fig.align="center"}
+qcstats = so@meta.data
+ggplot(qcstats,aes(x = scater_qcstats_sum, y = percent.mito*100, color = qc.mito.high))+
+   geom_point(alpha = .7)+
+   scale_color_manual(values = c("steelblue2", "tan2"))+
+   guides(color=FALSE)+
+   theme_minimal()+
+   geom_vline(xintercept = c(500, 1000), linetype = "dashed", color = "firebrick2")+
+   geom_hline(yintercept = 10, linetype = "dashed")
+```
+
+```{r, fig.align="center", echo=FALSE}
+p_nUMI_mito <- ggplot(so@meta.data, aes(x = nCount_RNA, y = percent.mito, fill = percent.mito.cl))+
+  geom_point(alpha = .6, color = "grey25", shape = 21)+
+  theme_minimal()+
+  scale_fill_viridis_d()+
+  geom_vline(xintercept = c(1000, 5000), linetype = "dashed")+scale_x_continuous(breaks = seq(from = 0, to = 1e5, by = 1e4))+
+   geom_hline(yintercept = .1, linetype = "dashed")
+ggMarginal(p_nUMI_mito, type = "density")
+```
+
+```{r, fig.width=12, fig.height=4}
+so@meta.data$umiSum.mito <- qcstats$subsets_Mito_sum
+p <- ggplot(so@meta.data, aes(x = nCount_RNA, y = umiSum.mito, fill = percent.mito.cl))+
+  geom_point(alpha = .6, color = "grey25", shape = 21)+
+  theme_minimal()+
+  scale_fill_viridis_d()
+grid.arrange(p, p+facet_wrap(~percent.mito.cl, ncol = 2), ncol=2)
+```
+# Session info
+
+```{r session_info, echo=F}
+sessionInfo()
+```
