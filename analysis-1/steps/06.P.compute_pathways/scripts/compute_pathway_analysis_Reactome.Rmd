@@ -1,0 +1,105 @@
+---
+title: "Chikv | Pathway analysis computation | Reactome"
+author: "Giorgio Gonnella"
+date: 2025-07-08
+output:
+  html_document:
+    theme: sandstone
+params:
+  analysis: "1"
+  input_step: "05.P.compute_de"
+  input_rds: "so_w_deseq.rds"
+  this_step: "06.P.compute_pathways"
+  output_rds: "so_w_pathways.Reactome.rds"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message=F, warning=F, echo=F)
+withr::with_dir(here::here(), { source("renv/activate.R") })
+
+library(clusterProfiler)
+library(pathview)
+library(Organism.dplyr)
+library(fgsea)
+library(DOSE)
+library(ReactomePA)
+library(msigdbr)
+require(org.Hs.eg.db)
+
+analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
+
+input_step_dir <- paste0(analysis_root, "steps/", params$input_step, "/")
+input_var_dir <- paste0(input_step_dir, "results/vars/")
+if (!dir.exists(input_var_dir)) {
+  stop("Input variable directory does not exist: ", input_var_dir)
+}
+
+this_step_dir <- paste0(analysis_root, "steps/", params$this_step, "/")
+if (!dir.exists(this_step_dir)) {
+  stop("Current step directory does not exist: ", this_step_dir)
+}
+
+var_dir <- paste0(this_step_dir, "results/vars/")
+dir.create(var_dir, showWarnings = FALSE, recursive = TRUE)
+
+helpers_dir <- here::here("helpers/")
+source(paste0(helpers_dir, "pathway_analysis_comp_helpers.R"))
+```
+
+```{r load_input_data}
+so <- readRDS(file = paste0(input_var_dir, params$input_rds))
+celltypes <- unique(so$celltype)
+cond_pairs <- c("A", "M6", "NC", "C")
+```
+
+# Analysis
+
+```{r prepare_results_slots}
+so@misc$ora <- list()
+so@misc$gsea <- list()
+for (db in c("Reactome")) {
+  so@misc$ora[[db]] <- list()
+  so@misc$gsea[[db]] <- list()
+  for (pair in cond_pairs) {
+    so@misc$ora[[db]][[pair]] <- list()
+    so@misc$gsea[[db]][[pair]] <- list()
+  }
+}
+```
+
+```{r ora_reactome_analysis}
+for (pair in cond_pairs) {
+  for (ct in celltypes) {
+    ora_input <- so@misc$de[[pair]]$pval_filt[[ct]]
+    if (!is.null(ora_input)) {
+      print(paste0("Computing ORA Reactome analysis for celltype ", ct, " (pair: ", pair, ")"))
+      so@misc$ora$Reactome[[pair]][[ct]] <- compute_ora_Reactome(ora_input)
+    }
+  }
+}
+```
+
+```{r gsea_reactome_analysis}
+for (pair in cond_pairs) {
+  for (ct in celltypes) {
+    gsea_input <- so@misc$de[[pair]]$all[[ct]]
+    if (!is.null(gsea_input)) {
+      print(paste0("Computing GSEA Reactome analysis for celltype ", ct, " (pair: ", pair, ")"))
+      so@misc$gsea$Reactome[[pair]][[ct]] <- compute_gsea_Reactome(gsea_input)
+    }
+  }
+}
+```
+
+# Save Results
+
+```{r save_results}
+saveRDS(so, paste0(var_dir, params$output_rds))
+```
+
+# Session info
+
+```{r}
+sessionInfo()
+```
+
