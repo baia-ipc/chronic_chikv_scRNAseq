@@ -1,0 +1,168 @@
+---
+title: "Chikv | QC filtering for each sample"
+author: "Giorgio Gonnella"
+date: "2024-06-26"
+output:
+  html_document: default
+params:
+  analysis: "1"
+  step: "02.P.filter"
+  input_step: "01.P.create_so"
+  sample: NA
+  sample_spec_filter_selection: TRUE
+  filter_fine_T_celltypes: FALSE
+  skip_vdj_filter: FALSE
+  never_keep_outliers: FALSE
+---
+
+```{r setup, echo=FALSE, include=FALSE}
+knitr::opts_chunk$set(message=F, warning=F, echo=F)
+withr::with_dir(here::here(), { source("renv/activate.R") })
+
+library(Seurat)
+library(scater)
+library(DT)
+library(parallel)
+library(robustbase)
+library(viridis)
+library(SingleR)
+library(celldex)
+
+if (is.na(params$sample)) {
+  stop("Please provide a sample name")
+}
+
+analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
+
+input_step_dir <- paste0(analysis_root, "steps/", params$input_step, "/")
+input_var_dir <- paste0(input_step_dir, "results/vars/")
+if (!dir.exists(input_var_dir)) {
+  stop("Input variable directory does not exist: ", input_var_dir)
+}
+
+this_step_dir <- paste0(analysis_root, "steps/", params$step, "/")
+if (!dir.exists(this_step_dir)) {
+  stop("Current step directory does not exist: ", this_step_dir)
+}
+
+var_dir <- paste0(this_step_dir, "results/vars/")
+dir.create(var_dir, showWarnings = F, recursive = T)
+
+helpers_dir <- here::here("helpers/")
+source(paste0(helpers_dir, "qc_helpers.R"))
+```
+
+# Load Seurat object
+
+```{r load_so}
+so <- readRDS(paste0(input_var_dir, params$sample, "_so_initial.rds"))
+```
+
+# Filtering
+
+## Filter by nGenes, nUMIs and percent.mito
+
+```{r set_min_nGenes_thresholds}
+min_nGenes <- ceiling(attr(so@meta.data$qc.nexprs.low, "thresholds")["lower"])
+max_nGenes <- ceiling(attr(so@meta.data$qc.nexprs.high, "thresholds")["higher"])
+```
+
+```{r set_nUMI_thresholds}
+min_nUMI <- ceiling(attr(so@meta.data$qc.lib.low, "thresholds")["lower"])
+max_nUMI <- ceiling(attr(so@meta.data$qc.lib.high, "thresholds")["higher"])
+```
+
+```{r set_max_pmito_threshold}
+max_pmito <- attr(so@meta.data$qc.mito.high, "thresholds")["higher"]
+```
+
+```{r store_pre_filtering_stats}
+so@misc$qc_filtering = list()
+so@misc$qc_filtering$nCells = ncol(so)
+so@misc$qc_filtering$nGenes = c(min_nGenes, max_nGenes)
+so@misc$qc_filtering$nUMIs = c(min_nUMI, max_nUMI)
+so@misc$qc_filtering$pmito = max_pmito
+so@misc$qc_filtering$nCells_failing_nGenes =
+  count(so$nFeature_RNA > min_nGenes & so$nFeature_RNA < max_nGenes)
+so@misc$qc_filtering$nCells_failing_nUMIs =
+  count(so$nCount_RNA > min_nUMI & so$nCount_RNA < max_nUMI)
+so@misc$qc_filtering$nCells_failing_pmito = count(so$percent.mito > max_pmito)
+so@misc$qc_filtering$nCells_failing_multi_outliers = count(so$multi.outlier)
+```
+
+```{r filter_by_nGenes_nUMIs_pmito}
+so <- subset(so, subset = nCount_RNA > min_nUMI & nCount_RNA < max_nUMI &
+             nFeature_RNA > min_nGenes & nFeature_RNA < max_nGenes &
+             percent.mito <= max_pmito)
+so$percent.mito.cl <- droplevels(so$percent.mito.cl)
+```
+
+## Filter multi-outliers
+
+```{r filter_multioutliers}
+so <- subset(so, subset = multi.outlier == FALSE)
+so@misc$qc_filtering$multi_outliers_applied = T
+```
+
+## Filter by cell type
+
+### SingleR
+
+```{r singleR}
+ref <- celldex::MonacoImmuneData()
+sce <- SingleCellExperiment(assays = list(counts = so@assays$RNA$counts))
+sce <- scater::logNormCounts(sce)
+
+# preparing pred main
+main_pred <- SingleR(test = sce, ref = ref, labels = ref$label.main,
+                     assay.type.test = "logcounts")
+main_pred_tab <- as.data.frame(main_pred$scores[,
+                   colnames(main_pred$scores)%in%unique(main_pred$labels)])
+main_pred_tab$pruned.labels <- main_pred$pruned.labels
+colnames(main_pred_tab) <-
+  paste(colnames(main_pred_tab), "singleR_main", sep = "_")
+rownames(main_pred_tab) <- rownames(main_pred)
+
+# preparing pred fine
+fine_pred <- SingleR(test = sce, ref = ref, labels = ref$label.fine,
+                     assay.type.test = "logcounts")
+fine_pred_tab <- as.data.frame(fine_pred$scores[,
+                   colnames(fine_pred$scores)%in%unique(fine_pred$labels)])
+fine_pred_tab$pruned.labels <- fine_pred$pruned.labels
+colnames(fine_pred_tab) <-
+  paste(colnames(fine_pred_tab), "singleR_fine", sep = "_")
+rownames(fine_pred_tab) <- rownames(fine_pred)
+
+# integrating into seurat meta data
+so@meta.data <- cbind(so@meta.data, main_pred_tab, fine_pred_tab)
+if (count(is.na(so$pruned.labels_singleR_main)) > 0)
+  so$pruned.labels_singleR_main[is.na(so$pruned.labels_singleR_main)] <- "unchar"
+print(sort(table(so$pruned.labels_singleR_main), decreasing = TRUE))
+if (count(is.na(so$pruned.labels_singleR_fine)) > 0)
+  so$pruned.labels_singleR_fine[is.na(so$pruned.labels_singleR_fine)] <- "unchar"
+print(sort(table(so$pruned.labels_singleR_fine), decreasing = T))
+
+lev_main <- names(sort(table(so$pruned.labels_singleR_main), decreasing = TRUE))
+if (count(is.na(so$pruned.labels_singleR_main)) > 0)
+  lev_main <- c(lev_main[-which(lev_main == "unchar")], "unchar")
+so$pruned.labels_singleR_main <- factor(so$pruned.labels_singleR_main,
+                                        levels = lev_main)
+
+lev_fine <- names(sort(table(so$pruned.labels_singleR_fine), decreasing = TRUE))
+if (count(is.na(so$pruned.labels_singleR_fine)) > 0)
+  lev_fine <- c(lev_fine[-which(lev_fine == "unchar")], "unchar")
+so$pruned.labels_singleR_fine <- factor(so$pruned.labels_singleR_fine,
+                                        levels = lev_fine)
+```
+
+# Saving
+
+```{r saving, echo=T}
+saveRDS(so, paste0(var_dir, params$sample, "_so_filtered.rds"))
+```
+
+# Session info
+
+```{r session_info, echo=F}
+sessionInfo()
+```
