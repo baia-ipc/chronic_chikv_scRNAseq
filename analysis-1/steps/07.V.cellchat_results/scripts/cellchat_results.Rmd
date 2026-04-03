@@ -1,0 +1,459 @@
+---
+title: "Chikv | CellChat results"
+author: "Giorgio Gonnella"
+date: 2025-12-11
+output:
+  html_document:
+    theme: sandstone
+params:
+  analysis: "1"
+  input_step: "07.P.compute_cellchat"
+  input_rds: "so_w_cellchat.rds"
+  this_step: "07.V.cellchat_results"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, echo = FALSE)
+withr::with_dir(here::here(), { source("renv/activate.R") })
+
+library(Seurat)
+library(CellChat)
+library(patchwork)
+library(ggplot2)
+library(circlize)
+library(ComplexHeatmap)
+library(grid)
+
+analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
+
+input_step_dir <- paste0(analysis_root, "steps/", params$input_step, "/")
+input_var_dir  <- paste0(input_step_dir, "results/vars/")
+
+if (!dir.exists(input_var_dir)) {
+  stop("Input variable directory does not exist: ", input_var_dir)
+}
+
+this_step_dir  <- paste0(analysis_root, "steps/", params$this_step, "/")
+if (!dir.exists(this_step_dir)) {
+  stop("Current step directory does not exist: ", this_step_dir)
+}
+
+plots_outdir <- paste0(this_step_dir, "results/plots/")
+if (!dir.exists(plots_outdir)) {
+  dir.create(plots_outdir, recursive = TRUE)
+}
+```
+
+```{r load_so}
+so <- readRDS(file = paste0(input_var_dir, params$input_rds))
+```
+
+```{r extract_cellchat_objects}
+cc_A_NC  <- so@misc$cellchat$A_NC
+cc_6m_NC <- so@misc$cellchat$`6m_NC`
+cc_A_C <- so@misc$cellchat$A_C
+cc_6m_C  <- so@misc$cellchat$`6m_C`
+
+cellchat_list <- list(
+  A_NC   = cc_A_NC,
+  A_C    = cc_A_C,
+  `6m_NC` = cc_6m_NC,
+  `6m_C`  = cc_6m_C
+)
+```
+
+# Single conditions combinations
+
+## Overview plots
+
+High-level exploratory plots per group: number and strength of
+interactions and aggregate circle networks.
+
+```{r plot_drawing_helper}
+draw_grid_plot <- function(plt, title) {
+  draw(plt, newpage=T, padding = unit(c(0.2, 0.2, 2, 0.2), "cm"))
+  grid.text(title,
+            y = unit(1, "npc") - unit(1, "cm"),
+            gp = gpar(fontsize = 12))
+} 
+```
+
+
+```{r overview, fig.width=7, fig.height=7}
+for (nm in names(cellchat_list)) {
+  cc <- cellchat_list[[nm]]
+  outdir <- file.path(plots_outdir, "overview", nm)
+  dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
+
+  plt <- netVisual_heatmap(cc)
+  title <- paste0(nm, ": Interaction counts")
+  draw_grid_plot(plt, title)
+  pdf(file.path(outdir, paste0(nm, "_heatmap_count.pdf")),
+      width = 7, height = 7)
+  draw_grid_plot(plt, title)
+  dev.off()
+
+  plt <- netVisual_heatmap(cc, measure = "weight")
+  title <- paste0(nm, ": Interaction weight")
+  draw_grid_plot(plt, title)
+  pdf(file.path(outdir, paste0(nm, "_heatmap_weight.pdf")),
+      width = 7, height = 7)
+  draw_grid_plot(plt, title)
+  dev.off()
+}
+```
+
+## Circle and hierarchy plots for all pathways
+
+```{r circle_all_pathways}
+for (cc_name in names(cellchat_list)) {
+  cc <- cellchat_list[[cc_name]]
+  all_pathways <- cc@netP$pathways
+  outdir <- file.path(plots_outdir, "circle", cc_name)
+  dir.create(outdir, showWarnings = F, recursive = T)
+  for (pathway in all_pathways) {
+    print(pathway)
+    plt <- netVisual_aggregate(cc, signaling  = pathway,
+      layout = "circle")
+    title(paste0(cc_name, ": ", pathway))
+    plt <- recordPlot()
+    pdf(output_file <- file.path(outdir,
+      paste0(cc_name, "_", gsub(" ", "_", pathway), "_circle.pdf")),
+      width=9, height=9)
+    replayPlot(plt)
+    dev.off()
+  }
+}
+```
+```{r hierarchy_all_pathways}
+for (cc_name in names(cellchat_list)) {
+  cc <- cellchat_list[[cc_name]]
+  all_pathways <- cc@netP$pathways
+  outdir <- file.path(plots_outdir, "hierarchy", cc_name)
+  dir.create(outdir, showWarnings = F, recursive = T)
+  for (pathway in all_pathways) {
+    print(pathway)
+    for (cg in names(idx)) {
+      print(cg)
+      plt <- netVisual_aggregate(cc, signaling  = pathway,
+        layout = "hierarchy", vertex.receiver = idx[[cg]],
+        vertex.weight = 5, show.legend=T,
+        vertex.label.cex = 0.6, point.size = 0.3,
+        scale=T, big.gap=15, small.gap=2)
+      title(paste0(cc_name, ": ", pathway, " - ", cg))
+      plt <- recordPlot()
+      pdf(output_file <- file.path(outdir,
+        paste0(cc_name, "_", gsub(" ", "_", pathway),
+               "_receiver_", cg, "_hierarchy.pdf")),
+        width=9, height=12)
+      replayPlot(plt)
+      dev.off()
+    }
+  }
+}
+```
+
+# Merged CellChat objects for binary comparisons
+
+```{r merging_helper}
+merge_two_cellchat <- function(cc1, cc2, names) {
+  object.list <- setNames(list(cc1, cc2), names)
+  merged      <- mergeCellChat(object.list, add.names = names(object.list))
+  merged
+}
+```
+
+```{r merge}
+cc_A_NC_vs_C  <- merge_two_cellchat(cc_A_NC,  cc_A_C,   c("A_NC",  "A_C"))
+cc_6m_NC_vs_C <- merge_two_cellchat(cc_6m_NC, cc_6m_C,  c("6m_NC", "6m_C"))
+cc_NC_A_vs_6m <- merge_two_cellchat(cc_A_NC,  cc_6m_NC, c("A_NC",  "6m_NC"))
+cc_C_A_vs_6m  <- merge_two_cellchat(cc_A_C,   cc_6m_C,  c("A_C",   "6m_C"))
+comp_list <- list(
+  A_NC_vs_C  = cc_A_NC_vs_C,
+  `6m_NC_vs_C` = cc_6m_NC_vs_C,
+  NC_A_vs_6m = cc_NC_A_vs_6m,
+  C_A_vs_6m  = cc_C_A_vs_6m
+)
+```
+
+```{r, fig.width=12, fig.height=12}
+ggA1 <- rankNet(cc_A_NC_vs_C,  mode="comparison", measure="weight", stacked=TRUE,  do.stat=FALSE)
+ggA2 <- rankNet(cc_A_NC_vs_C,  mode="comparison", measure="weight", stacked=FALSE, do.stat=FALSE)
+gg6_1 <- rankNet(cc_6m_NC_vs_C, mode="comparison", measure="weight", stacked=TRUE,  do.stat=FALSE)
+gg6_2 <- rankNet(cc_6m_NC_vs_C, mode="comparison", measure="weight", stacked=FALSE, do.stat=FALSE)
+
+(ggA1 + ggA2) / (gg6_1 + gg6_2)
+```
+
+
+```{r, fig.width=12, fig.height=9}
+library(CellChat)
+library(ComplexHeatmap)
+library(grid)  # for unit()
+
+# Helper: make two comparable heatmaps (same pathway set) side-by-side
+make_pair_ht <- function(cc_left, cc_right, left_title, right_title,
+                         pattern = "outgoing",
+                         width = 5, height = 6, gap_cm = 0.5) {
+  
+  # Union of pathways to ensure same rows appear in both heatmaps
+  pathway.union <- union(cc_left@netP$pathways, cc_right@netP$pathways)
+
+  ht_left <- netAnalysis_signalingRole_heatmap(
+    cc_left,
+    pattern   = pattern,
+    signaling = pathway.union,
+    title     = left_title,
+    width     = width,
+    height    = height
+  )
+
+  ht_right <- netAnalysis_signalingRole_heatmap(
+    cc_right,
+    pattern   = pattern,
+    signaling = pathway.union,
+    title     = right_title,
+    width     = width,
+    height    = height
+  )
+
+  draw(ht_left + ht_right, ht_gap = unit(gap_cm, "cm"))
+  
+  invisible(list(ht_left = ht_left, ht_right = ht_right, pathways = pathway.union))
+}
+
+# Panels C–D
+# Acute: A_C and A_NC side-by-side
+acute_ht <- make_pair_ht(
+  cc_left    = cc_A_NC,
+  cc_right   = cc_A_C,
+  left_title = "A_NC",
+  right_title= "A_C",
+  pattern    = "outgoing",
+  width      = 10, height = 12, gap_cm = 1.5
+)
+
+# 6 months: 6m_C and 6m_NC side-by-side
+m6_ht <- make_pair_ht(
+  cc_left    = cc_6m_NC,
+  cc_right   = cc_6m_C,
+  left_title = "6m_NC",
+  right_title= "6m_C",
+  pattern    = "outgoing",
+  width      = 10, height = 12, gap_cm = 1.5
+)
+
+```
+
+```{r merged, fig.width=12, fig.height=10}
+for (cc_name in names(comp_list)) {
+  cc <- comp_list[[cc_name]]
+  outdir <- file.path(plots_outdir, "comparisons", cc_name)
+  dir.create(outdir, showWarnings = F, recursive = T)
+  # # Comparing the total number of interactions
+  gg1 <- compareInteractions(cc, show.legend = F, group = c(1,2)) +
+     ggtitle(paste0(cc_name, ": Number of interactions"))
+  print(gg1)
+  ggsave(filename = file.path(outdir,
+         paste0(cc_name, "_compareInteractions_count.pdf")),
+         plot = gg1, width = 7, height = 5)
+  # Comparing the total interaction strength
+  gg2 <- compareInteractions(cc, show.legend = F, group = c(1,2),
+                             measure="weight") +
+  ggtitle(paste0(cc_name, ": Interaction strength"))
+  print(gg2)
+  ggsave(filename = file.path(outdir,
+         paste0(cc_name, "_compareInteractions_weight.pdf")),
+    plot = gg2, width = 7, height = 5)
+  # Examine the differential number of interactions
+  op <- par(mar = c(2, 2, 6, 2), xpd = NA)
+  netVisual_diffInteraction(cc, weight.scale = T)
+  title(paste0(cc_name, ": Differential number of interactions"), cex.main = 1.4, line = 2)
+  grDevices::pdf(file.path(outdir,
+    paste0(cc_name, "_diffInteraction_count.pdf")),
+    width = 12, height = 10)
+  dev.off()
+  # Examine the differential interaction strengths
+  op <- par(mar = c(2, 2, 6, 2), xpd = NA)
+  netVisual_diffInteraction(cc, weight.scale = T, measure = "weight")
+  title(paste0(cc_name, ": Differential interaction strengths"), cex.main = 1.4, line = 2)
+  grDevices::pdf(file.path(outdir,
+    paste0(cc_name, "_diffInteraction_weight.pdf")),
+    width = 12, height = 10)
+  dev.off()
+  # heatmap of differential number of interactions
+  plt <- netVisual_heatmap(cc)
+  title <- paste0(cc_name, ": Differential interaction counts")
+  draw_grid_plot(plt, title)
+  pdf(file.path(outdir, paste0(cc_name, "_diff_heatmap_count.pdf")),
+      width = 7, height = 7)
+  draw_grid_plot(plt, title)
+  dev.off()
+
+  # heatmap of differential interaction strengths
+  plt <- netVisual_heatmap(cc, measure = "weight")
+  title <- paste0(cc_name, ": Differential interaction weights")
+  draw_grid_plot(plt, title)
+  pdf(file.path(outdir, paste0(cc_name, "_diff_heatmap_weight.pdf")),
+      width = 7, height = 7)
+  draw_grid_plot(plt, title)
+  dev.off()
+}
+```
+
+# Cell groups
+
+```{r index_cell_groups}
+idx <- list()
+idx[["B_cells"]]           <- c(1,2,3,4,5)
+idx[["CD4_T_cells"]]       <- c(6,7,8,9,10,11,12,13)
+idx[["CD8_T_cells"]]       <- c(14,15,16,17)
+idx[["GD_T_cells"]]        <- c(18,19)
+idx[["Dendritic_cells"]]   <- c(22,23)
+idx[["Monocytes"]]         <- c(24,25,26)
+idx[["Other_cells"]]       <- c(20, 21, 27)
+
+group.celltype <- c(
+  rep("B cells",          5),
+  rep("CD4+ T cells",     8),
+  rep("CD8+ T cells",     4),
+  rep("GD T cells",       2),
+  rep("MAIT cells",       1),
+  rep("NK cells",         1),
+  rep("Dendritic cells",  2),
+  rep("Monocytes",        3),
+  rep("Progenitor cells", 1)
+)
+```
+
+```{r merge_interactions}
+mergeInteractions_inplace <- function(cc, group.celltype) {
+  cc_g <- mergeInteractions(cc, group.celltype)
+  cc_g@net$count  <- cc_g@net$count.merged
+  cc_g@net$weight <- cc_g@net$weight.merged
+  cc_g@net$count.merged  <- NULL
+  cc_g@net$weight.merged <- NULL
+  cc_g@idents <- factor(group.celltype[as.integer(cc@idents)],
+                      levels = unique(group.celltype))
+  return(cc_g)
+}
+
+cc_A_NC_g  = mergeInteractions_inplace(cc_A_NC, group.celltype)
+cc_6m_NC_g = mergeInteractions_inplace(cc_6m_NC, group.celltype)
+cc_A_C_g   = mergeInteractions_inplace(cc_A_C, group.celltype)
+cc_6m_C_g  = mergeInteractions_inplace(cc_6m_C, group.celltype)
+
+grouped_list <- list(
+  A_NC   = cc_A_NC_g,
+  A_C    = cc_A_C_g,
+  `6m_NC` = cc_6m_NC_g,
+  `6m_C`  = cc_6m_C_g
+)
+```
+
+# Single grouped CellChat objects
+
+```{r grouped_cellchat_plots}
+for (nm in names(grouped_list)) {
+  cc <- grouped_list[[nm]]
+  
+  outdir <- file.path(plots_outdir, "overview_grouped", nm)
+  dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
+  
+  # Heatmap of grouped interaction counts
+  plt <- netVisual_heatmap(cc)
+  title <- paste0(nm, ": Interaction counts")
+  draw_grid_plot(plt, title)
+  pdf(file.path(outdir, paste0(nm, "_grouped_heatmap_count.pdf")),
+      width = 7, height = 7)
+  draw_grid_plot(plt, title)
+  dev.off()
+
+  # Heatmap of grouped interaction strengths
+  plt <- netVisual_heatmap(cc, measure = "weight")
+  title <- paste0(nm, ": Interaction weight")
+  draw_grid_plot(plt, title)
+  pdf(file.path(outdir, paste0(nm, "_grouped_heatmap_weight.pdf")),
+      width = 7, height = 7)
+  draw_grid_plot(plt, title)
+  dev.off()
+}
+```
+
+## Merged grouped CellChat objects for binary comparisons
+
+```{r merge_cell_groups}
+cc_NC_A_vs_6m_g <- merge_two_cellchat(cc_A_NC_g, cc_6m_NC_g,c("A_NC", "6m_NC"))
+cc_C_A_vs_6m_g  <- merge_two_cellchat(cc_A_C_g,  cc_6m_C_g, c("A_C",  "6m_C"))
+cc_A_NC_vs_C_g  <- merge_two_cellchat(cc_A_NC_g, cc_A_C_g,  c("A_NC", "A_C"))
+cc_6m_NC_vs_C_g <- merge_two_cellchat(cc_6m_NC_g,cc_6m_C_g, c("6m_NC","6m_C"))
+
+comp_grouped_list <- list(
+  NC_A_vs_6m = cc_NC_A_vs_6m_g,
+  C_A_vs_6m  = cc_C_A_vs_6m_g,
+  A_NC_vs_C  = cc_A_NC_vs_C_g,
+  `6m_NC_vs_C` = cc_6m_NC_vs_C_g
+)
+```
+
+```{r merged, fig.width=12, fig.height=10}
+for (cc_name in names(comp_grouped_list)) {
+  cc <- comp_grouped_list[[cc_name]]
+  outdir <- file.path(plots_outdir, "comparisons_grouped", cc_name)
+  dir.create(outdir, showWarnings = F, recursive = T)
+  # # Comparing the total number of interactions
+  gg1 <- compareInteractions(cc, show.legend = F, group = c(1,2)) +
+     ggtitle(paste0(cc_name, ": Number of interactions"))
+  print(gg1)
+  ggsave(filename = file.path(outdir,
+         paste0(cc_name, "_grouped_compareInteractions_count.pdf")),
+         plot = gg1, width = 7, height = 5)
+  # Comparing the total interaction strength
+  gg2 <- compareInteractions(cc, show.legend = F, group = c(1,2),
+                             measure="weight") +
+  ggtitle(paste0(cc_name, ": Interaction strength"))
+  print(gg2)
+  ggsave(filename = file.path(outdir,
+         paste0(cc_name, "_grouped_compareInteractions_weight.pdf")),
+    plot = gg2, width = 7, height = 5)
+  # Examine the differential number of interactions
+  op <- par(mar = c(2, 2, 6, 2), xpd = NA)
+  netVisual_diffInteraction(cc, weight.scale = T)
+  title(paste0(cc_name, ": Differential number of interactions"), cex.main = 1.4, line = 2)
+  grDevices::pdf(file.path(outdir,
+    paste0(cc_name, "_grouped_diffInteraction_count.pdf")),
+    width = 12, height = 10)
+  dev.off()
+  # Examine the differential interaction strengths
+  op <- par(mar = c(2, 2, 6, 2), xpd = NA)
+  netVisual_diffInteraction(cc, weight.scale = T, measure = "weight")
+  title(paste0(cc_name, ": Differential interaction strengths"), cex.main = 1.4, line = 2)
+  grDevices::pdf(file.path(outdir,
+    paste0(cc_name, "_grouped_diffInteraction_weight.pdf")),
+    width = 12, height = 10)
+  dev.off()
+  # heatmap of differential number of interactions
+  plt <- netVisual_heatmap(cc)
+  title <- paste0(cc_name, ": Differential interaction counts")
+  draw_grid_plot(plt, title)
+  pdf(file.path(outdir, paste0(cc_name, "_grouped_diff_heatmap_count.pdf")),
+      width = 7, height = 7)
+  draw_grid_plot(plt, title)
+  dev.off()
+
+  # heatmap of differential interaction strengths
+  plt <- netVisual_heatmap(cc, measure = "weight")
+  title <- paste0(cc_name, ": Differential interaction weights")
+  draw_grid_plot(plt, title)
+  pdf(file.path(outdir, paste0(cc_name, "_grouped_diff_heatmap_weight.pdf")),
+      width = 7, height = 7)
+  draw_grid_plot(plt, title)
+  dev.off()
+}
+```
+
+## Session info
+
+```{r, echo=F}
+sessionInfo()
+```

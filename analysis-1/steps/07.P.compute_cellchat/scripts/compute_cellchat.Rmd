@@ -1,0 +1,129 @@
+---
+title: "Chikv | Cellchat analysis"
+author: "Giorgio Gonnella"
+date: 2025-11-28
+output:
+  html_document:
+    theme: sandstone
+params:
+  analysis: "1"
+  input_step: "03.P.integration"
+  input_rds: "integrated_so.rds"
+  this_step: "07.P.compute_cellchat"
+  output_rds: "so_w_cellchat.rds"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message=F, warning=F, echo=F)
+withr::with_dir(here::here(), { source("renv/activate.R") })
+
+library(Seurat)
+library(CellChat)
+library(future)
+
+options(future.globals.maxSize = 10 * 1024^3)
+
+analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
+
+input_step_dir <- paste0(analysis_root, "steps/", params$input_step, "/")
+input_var_dir <- paste0(input_step_dir, "results/vars/")
+
+if (!dir.exists(input_var_dir)) {
+  stop("Input variable directory does not exist: ", input_var_dir)
+}
+
+this_step_dir <- paste0(analysis_root, "steps/", params$this_step, "/")
+if (!dir.exists(this_step_dir)) {
+  stop("Current step directory does not exist: ", this_step_dir)
+}
+
+var_dir <- paste0(this_step_dir, "results/vars/")
+if (!dir.exists(var_dir)) {
+  dir.create(var_dir, recursive = TRUE)
+}
+```
+
+```{r load, echo=F}
+so <- readRDS(file = paste0(input_var_dir, params$input_rds))
+Idents(so) <- "celltype.abbrev"
+```
+
+# Cell proportions permutations test
+
+Perform a permutation test to assess the differences in cell type proportions.
+
+```{r subset_so_by_timepoint, echo=TRUE}
+so_A <- subset(so, TimePoint == "A")
+so_6m <- subset(so, TimePoint == "6m")
+so_A_NC <- subset(so_A, clinical_condition == "Non-Chronic")
+so_6m_NC <- subset(so_6m, clinical_condition == "Non-Chronic")
+so_A_C <- subset(so_A, clinical_condition == "Chronic")
+so_6m_C <- subset(so_6m, clinical_condition == "Chronic")
+```
+
+```{r init_misc}
+so@misc$cellchat <- list()
+```
+
+```{r cellchat_function}
+run_cellchat <- function(so, group.by, ncores = 32) {
+  cellchat <- createCellChat(object = GetAssayData(so, assay = "RNA",
+                                                   slot = "data"),
+                             meta   = so@meta.data,
+                             group.by = group.by)
+  cellchat@DB <- CellChatDB.human
+  cellchat <- subsetData(cellchat)
+
+  plan("multisession", workers = ncores)
+  cellchat <- identifyOverExpressedGenes(cellchat)
+  cellchat <- identifyOverExpressedInteractions(cellchat)
+  cellchat <- smoothData(cellchat, adj = PPI.human)
+
+  cellchat <- computeCommunProb(cellchat,
+                                raw.use         = TRUE,
+                                population.size = TRUE)
+  cellchat <- filterCommunication(cellchat, min.cells = 10)
+  cellchat <- computeCommunProbPathway(cellchat)
+  cellchat <- aggregateNet(cellchat)
+  cellchat <- netAnalysis_computeCentrality(cellchat, slot.name = "netP")
+
+  plan("sequential")
+  return(cellchat)
+}
+```
+
+## Acute
+
+```{r A_NC_cellchat, echo=TRUE}
+so@misc$cellchat["A_NC"] <- run_cellchat(so_A_NC, group.by = "celltype.abbrev")
+```
+
+## 6 months
+
+```{r m6_NC_cellchat, echo=TRUE}
+so@misc$cellchat["6m_NC"] <- run_cellchat(so_6m_NC, group.by = "celltype.abbrev")
+```
+
+## Non-Chronic
+
+```{r A_C_cellchat, echo=TRUE}
+so@misc$cellchat["A_C"] <- run_cellchat(so_A_C, group.by = "celltype.abbrev")
+```
+
+## Chronic
+
+```{r m6_C_cellchat, echo=TRUE}
+so@misc$cellchat["6m_C"] <- run_cellchat(so_6m_C, group.by = "celltype.abbrev")
+```
+
+## Saving data
+
+```{r save, echo=TRUE}
+saveRDS(so, paste0(var_dir, params$output_rds))
+```
+
+## Session info
+
+```{r, echo=F}
+sessionInfo()
+```
