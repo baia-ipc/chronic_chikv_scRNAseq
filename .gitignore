@@ -11,3 +11,15 @@ data/
 rundir/
 ._.DS_Store
 .DS_Store
+
+# Generated analysis outputs
+analysis-1/results/
+analysis-1/steps/*/results/**
+
+# Cell Ranger derived links and prior analyses
+cellranger/results/
+
+# Submission bundles and supporting lab files
+geo-submission/
+documents/chikv/labbook_ScRNAsq_CHIK_batches_123.xlsx
+documents/chikv/sequencings/
