@@ -1,7 +1,7 @@
 ---
 title: "Chikv | Create Seurat 5 object for a sample"
 author: "Giorgio Gonnella"
-date: "2025-06-25"
+date: "`r Sys.Date()`"
 output:
   html_document: default
 params:

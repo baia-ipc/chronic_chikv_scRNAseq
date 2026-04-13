@@ -1,7 +1,7 @@
 ---
 title: "Chikv | Pseudobulk DESeq2 analysis"
 author: "Giorgio Gonnella"
-date: 2025-06-27
+date: "`r Sys.Date()`"
 output:
   html_document:
     theme: sandstone

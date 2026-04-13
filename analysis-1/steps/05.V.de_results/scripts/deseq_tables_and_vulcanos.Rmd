@@ -1,7 +1,7 @@
 ---
-title: "Chikv | DE tables and vulcano plots"
+title: "Chikv | DE tables and volcano plots"
 author: "Giorgio Gonnella"
-date: 2025-06-27
+date: "`r Sys.Date()`"
 output:
   html_document:
     theme: sandstone
@@ -10,6 +10,7 @@ params:
   input_step: "05.P.compute_de"
   input_rds: "so_w_deseq.rds"
   step: "05.V.de_results"
+  pair: "A"   # one of: A, M6, NC, C
 ---
 
 ```{r setup, include=FALSE}
@@ -25,115 +26,93 @@ analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
 
 input_step_dir <- paste0(analysis_root, "steps/", params$input_step, "/")
 input_var_dir <- paste0(input_step_dir, "results/vars/")
-if (!dir.exists(input_var_dir)) {
+if (!dir.exists(input_var_dir))
   stop("Input variable directory does not exist: ", input_var_dir)
-}
 
 this_step_dir <- paste0(analysis_root, "steps/", params$step, "/")
-if (!dir.exists(this_step_dir)) {
+if (!dir.exists(this_step_dir))
   stop("Current step directory does not exist: ", this_step_dir)
-}
+
+lbl_map <- list(A = "NC_vs_C", M6 = "NC_vs_C", NC = "6M_vs_A", C = "6M_vs_A")
+if (!params$pair %in% names(lbl_map))
+  stop("Unknown pair: ", params$pair,
+       ". Must be one of: ", paste(names(lbl_map), collapse=", "))
+
+n   <- params$pair
+lbl <- lbl_map[[n]]
+pfx <- paste0(n, ".", lbl)   # e.g. "A.NC_vs_C"
 
 p_adj_filt_tsv_dir <- paste0(this_step_dir, "results/tables/p_adj_filt/")
 dir.create(p_adj_filt_tsv_dir, showWarnings = FALSE, recursive = TRUE)
-unfiltered_tsv_dir <- paste0(this_step_dir, "results/tables/unfiltered/")
-dir.create(unfiltered_tsv_dir, showWarnings = FALSE, recursive = TRUE)
 vulcano_outdir <- paste0(this_step_dir, "results/plots/vulcano/")
-dir.create(vulcano_outdir, recursive = T, showWarnings = F)
+dir.create(vulcano_outdir, recursive = TRUE, showWarnings = FALSE)
+
+strsanitize <- function(s) gsub(" ", "_", gsub("[^[:alnum:]]", "_", s))
+
+h <- function(level, text) writeLines(c(paste0(strrep("#", level), " ", text), ""))
 ```
 
 ```{r load_input_data}
 so <- readRDS(file = paste0(input_var_dir, params$input_rds))
 ```
 
-```{r strsanitize}
-strsanitize <- function(s) {
-  gsub(" ", "_", gsub("[^[:alnum:]]", "_", s))
+```{r plots_and_tables, results='asis'}
+de <- so@misc$de[[n]]
+celltypes   <- names(de$pval_filt)
+no_deg_cts  <- character(0)
+fig_counter <- 0L
+table_n     <- 200L
+
+for (ct in celltypes) {
+  data_ct  <- de$pval_filt[[ct]]
+  cts      <- strsanitize(ct)
+  has_data <- !is.null(data_ct) && nrow(data_ct) > 0
+
+  # TSV
+  if (has_data) {
+    data_ct$cmp  <- lbl
+    data_ct$ct   <- ct
+    data_ct$gene <- rownames(data_ct)
+    fwrite(data_ct[, c("cmp","ct","gene","pct.1","pct.2","p_val","p_val_adj","avg_log2FC")],
+           file = paste0(p_adj_filt_tsv_dir, pfx, ".", cts, ".tsv"),
+           sep = "\t", quote = FALSE)
+  }
+
+  if (!has_data) {
+    no_deg_cts <- c(no_deg_cts, ct)
+    next
+  }
+
+  fig_counter <- fig_counter + 1L
+
+  h(2, paste0(pfx, " \u2014 ", ct))
+  h(3, paste0("Fig ", fig_counter, ".", pfx))
+
+  png_path <- paste0(vulcano_outdir, pfx, ".", cts, ".png")
+  plt <- EnhancedVolcano(data_ct, lab = rownames(data_ct),
+                         x = 'avg_log2FC', y = 'p_val_adj',
+                         FCcutoff = 0.58, pCutoff = 0.05) +
+    ggtitle(paste0(n, " | ", lbl, " | ", ct))
+  ggsave(png_path, plt, width=7, height=5)
+  writeLines(paste0("![](", png_path, ")\n"))
+
+  table_data <- data_ct[order(data_ct$p_val_adj), c("avg_log2FC","pct.1","pct.2","p_val","p_val_adj")]
+  table_caption <- paste0(pfx, " \u2014 ", ct)
+  if (nrow(table_data) > table_n) {
+    table_caption <- paste0(table_caption, " \u2014 Top ", table_n, " by adjusted p-value")
+  }
+
+  print(knitr::kable(
+    head(table_data, table_n),
+    digits = 4,
+    caption = table_caption
+  ))
 }
-```
 
-```{r metadata}
-lbl <- list()
-lbl[["A"]] <- "NC_vs_C"
-lbl[["M6"]] <- "NC_vs_C"
-lbl[["NC"]] <- "6M_vs_A"
-lbl[["C"]] <- "6M_vs_A"
-```
-
-```{r plots_and_tables}
-for (n in names(so@misc$de)) {
-  #print("\n")
-  #print(paste0("Results for: ", n, "(", lbl[[n]], ")"))
-  #print("\n")
-  cond_pairs_lbl <- lbl[[n]]
-  celltypes <- names(so@misc$de[[n]]$pval_filt)
-  for (ct in celltypes) {
-    #print(paste0("- Celltype: ", ct))
-    #print("\n")
-    data <- so@misc$de[[n]]$pval_filt[[ct]]
-    fname <- paste0(vulcano_outdir, n, ".", cond_pairs_lbl, ".",
-                    strsanitize(ct), ".png")
-    if (!is.null(data)) {
-      if (nrow(data) > 0) {
-        plt <- EnhancedVolcano(data, lab = rownames(data),
-                               x = 'avg_log2FC', y = 'p_val_adj',
-                               FCcutoff = 0.58, pCutoff = 0.05) +
-          ggtitle(paste0(n, " | ", cond_pairs_lbl, " | ", ct))
-        #print("\n")
-        #print(paste0("  Writing file: ", fname))
-        #print("\n")
-        ggsave(fname, plt, width = 7, height = 5)
-        print(plt)
-        #print("\n")
-      }
-    }
-    fname <- paste0(p_adj_filt_tsv_dir, n, ".", cond_pairs_lbl, ".",
-                    strsanitize(ct), ".tsv")
-    if (!is.null(data)) {
-      if (nrow(data) > 0) {
-        # Add metadata columns
-        data$cmp <- cond_pairs_lbl
-        data$ct <- ct
-        data$gene <- rownames(data)
-
-        # Reorder columns to match desired output format
-        output <- data[, c("cmp", "ct", "gene", "pct.1", "pct.2",
-                           "p_val", "p_val_adj", "avg_log2FC")]
-
-        # Write the data to file
-        #print("\n")
-        #print(paste0("  Writing file: ", fname))
-        #print("\n")
-        fwrite(output, file = fname, sep = "\t", quote = FALSE)
-      }
-    }
-  }
-  celltypes <- names(so@misc$de[[n]]$all)
-  for (ct in celltypes) {
-    #print(paste0("- Celltype: ", ct))
-    #print("\n")
-    data <- so@misc$de[[n]]$all[[ct]]
-    fname <- paste0(unfiltered_tsv_dir, n, ".", cond_pairs_lbl, ".",
-                    strsanitize(ct), ".tsv")
-    if (!is.null(data)) {
-      if (nrow(data) > 0) {
-        # Add metadata columns
-        data$cmp <- cond_pairs_lbl
-        data$ct <- ct
-        data$gene <- rownames(data)
-
-        # Reorder columns to match desired output format
-        output <- data[, c("cmp", "ct", "gene", "pct.1", "pct.2",
-                           "p_val", "p_val_adj", "avg_log2FC")]
-
-        # Write the data to file
-        #print("\n")
-        #print(paste0("  Writing file: ", fname))
-        #print("\n")
-        fwrite(output, file = fname, sep = "\t", quote = FALSE)
-      }
-    }
-  }
+# Collect all no-DEG cell types at the end
+if (length(no_deg_cts) > 0) {
+  h(2, "No significant DEGs")
+  writeLines(paste0("- ", no_deg_cts))
 }
 ```
 
@@ -142,4 +121,3 @@ for (n in names(so@misc$de)) {
 ```{r}
 sessionInfo()
 ```
-

@@ -1,7 +1,7 @@
 ---
 title: "Chikv | CellChat results"
 author: "Giorgio Gonnella"
-date: 2025-12-11
+date: "`r Sys.Date()`"
 output:
   html_document:
     theme: sandstone
@@ -10,6 +10,8 @@ params:
   input_step: "07.P.compute_cellchat"
   input_rds: "so_w_cellchat.rds"
   this_step: "07.V.cellchat_results"
+  pair: "A_NC_vs_C"
+  sfx:  "pfilt"
 ---
 
 ```{r setup, include=FALSE}
@@ -25,295 +27,74 @@ library(ComplexHeatmap)
 library(grid)
 
 analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
-
-input_step_dir <- paste0(analysis_root, "steps/", params$input_step, "/")
-input_var_dir  <- paste0(input_step_dir, "results/vars/")
-
-if (!dir.exists(input_var_dir)) {
+input_var_dir <- paste0(analysis_root, "steps/", params$input_step, "/results/vars/")
+if (!dir.exists(input_var_dir))
   stop("Input variable directory does not exist: ", input_var_dir)
-}
-
-this_step_dir  <- paste0(analysis_root, "steps/", params$this_step, "/")
-if (!dir.exists(this_step_dir)) {
+this_step_dir <- paste0(analysis_root, "steps/", params$this_step, "/")
+if (!dir.exists(this_step_dir))
   stop("Current step directory does not exist: ", this_step_dir)
-}
 
-plots_outdir <- paste0(this_step_dir, "results/plots/")
-if (!dir.exists(plots_outdir)) {
-  dir.create(plots_outdir, recursive = TRUE)
-}
-```
-
-```{r load_so}
-so <- readRDS(file = paste0(input_var_dir, params$input_rds))
-```
-
-```{r extract_cellchat_objects}
-cc_A_NC  <- so@misc$cellchat$A_NC
-cc_6m_NC <- so@misc$cellchat$`6m_NC`
-cc_A_C <- so@misc$cellchat$A_C
-cc_6m_C  <- so@misc$cellchat$`6m_C`
-
-cellchat_list <- list(
-  A_NC   = cc_A_NC,
-  A_C    = cc_A_C,
-  `6m_NC` = cc_6m_NC,
-  `6m_C`  = cc_6m_C
+pair_map <- list(
+  A_NC_vs_C    = c("A_NC",  "A_C"),
+  `6m_NC_vs_C` = c("6m_NC", "6m_C"),
+  NC_A_vs_6m   = c("A_NC",  "6m_NC"),
+  C_A_vs_6m    = c("A_C",   "6m_C")
 )
+if (!params$pair %in% names(pair_map))
+  stop("Unknown pair: ", params$pair)
+if (!params$sfx %in% c("all", "pfilt"))
+  stop("Unknown sfx: ", params$sfx)
+
+conds  <- pair_map[[params$pair]]
+nm1    <- conds[1]; nm2 <- conds[2]
+sfx    <- params$sfx
+thresh <- if (sfx == "pfilt") 0.05 else 1
+
+plots_outdir <- paste0(this_step_dir, "results/", params$pair, "/", sfx, "/plots/")
+dir.create(plots_outdir, recursive = TRUE, showWarnings = FALSE)
+
+.fig_counter <- 0L
+fig_label <- function(desc = NULL) {
+  .fig_counter <<- .fig_counter + 1L
+  lbl <- paste0(params$pair, ".", sfx, ".Fig", .fig_counter)
+  if (!is.null(desc)) lbl <- paste0(lbl, " \u2014 ", desc)
+  cat(paste0("\n\n### ", lbl, "\n\n"))
+}
 ```
 
-# Single conditions combinations
-
-## Overview plots
-
-High-level exploratory plots per group: number and strength of
-interactions and aggregate circle networks.
-
-```{r plot_drawing_helper}
+```{r helpers}
 draw_grid_plot <- function(plt, title) {
-  draw(plt, newpage=T, padding = unit(c(0.2, 0.2, 2, 0.2), "cm"))
-  grid.text(title,
-            y = unit(1, "npc") - unit(1, "cm"),
+  draw(plt, newpage = TRUE, padding = unit(c(0.2, 0.2, 2, 0.2), "cm"))
+  grid.text(title, y = unit(1, "npc") - unit(1, "cm"),
             gp = gpar(fontsize = 12))
-} 
-```
-
-
-```{r overview, fig.width=7, fig.height=7}
-for (nm in names(cellchat_list)) {
-  cc <- cellchat_list[[nm]]
-  outdir <- file.path(plots_outdir, "overview", nm)
-  dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
-
-  plt <- netVisual_heatmap(cc)
-  title <- paste0(nm, ": Interaction counts")
-  draw_grid_plot(plt, title)
-  pdf(file.path(outdir, paste0(nm, "_heatmap_count.pdf")),
-      width = 7, height = 7)
-  draw_grid_plot(plt, title)
-  dev.off()
-
-  plt <- netVisual_heatmap(cc, measure = "weight")
-  title <- paste0(nm, ": Interaction weight")
-  draw_grid_plot(plt, title)
-  pdf(file.path(outdir, paste0(nm, "_heatmap_weight.pdf")),
-      width = 7, height = 7)
-  draw_grid_plot(plt, title)
-  dev.off()
 }
-```
 
-## Circle and hierarchy plots for all pathways
-
-```{r circle_all_pathways}
-for (cc_name in names(cellchat_list)) {
-  cc <- cellchat_list[[cc_name]]
-  all_pathways <- cc@netP$pathways
-  outdir <- file.path(plots_outdir, "circle", cc_name)
-  dir.create(outdir, showWarnings = F, recursive = T)
-  for (pathway in all_pathways) {
-    print(pathway)
-    plt <- netVisual_aggregate(cc, signaling  = pathway,
-      layout = "circle")
-    title(paste0(cc_name, ": ", pathway))
-    plt <- recordPlot()
-    pdf(output_file <- file.path(outdir,
-      paste0(cc_name, "_", gsub(" ", "_", pathway), "_circle.pdf")),
-      width=9, height=9)
-    replayPlot(plt)
-    dev.off()
-  }
-}
-```
-```{r hierarchy_all_pathways}
-for (cc_name in names(cellchat_list)) {
-  cc <- cellchat_list[[cc_name]]
-  all_pathways <- cc@netP$pathways
-  outdir <- file.path(plots_outdir, "hierarchy", cc_name)
-  dir.create(outdir, showWarnings = F, recursive = T)
-  for (pathway in all_pathways) {
-    print(pathway)
-    for (cg in names(idx)) {
-      print(cg)
-      plt <- netVisual_aggregate(cc, signaling  = pathway,
-        layout = "hierarchy", vertex.receiver = idx[[cg]],
-        vertex.weight = 5, show.legend=T,
-        vertex.label.cex = 0.6, point.size = 0.3,
-        scale=T, big.gap=15, small.gap=2)
-      title(paste0(cc_name, ": ", pathway, " - ", cg))
-      plt <- recordPlot()
-      pdf(output_file <- file.path(outdir,
-        paste0(cc_name, "_", gsub(" ", "_", pathway),
-               "_receiver_", cg, "_hierarchy.pdf")),
-        width=9, height=12)
-      replayPlot(plt)
-      dev.off()
-    }
-  }
-}
-```
-
-# Merged CellChat objects for binary comparisons
-
-```{r merging_helper}
-merge_two_cellchat <- function(cc1, cc2, names) {
-  object.list <- setNames(list(cc1, cc2), names)
-  merged      <- mergeCellChat(object.list, add.names = names(object.list))
-  merged
-}
-```
-
-```{r merge}
-cc_A_NC_vs_C  <- merge_two_cellchat(cc_A_NC,  cc_A_C,   c("A_NC",  "A_C"))
-cc_6m_NC_vs_C <- merge_two_cellchat(cc_6m_NC, cc_6m_C,  c("6m_NC", "6m_C"))
-cc_NC_A_vs_6m <- merge_two_cellchat(cc_A_NC,  cc_6m_NC, c("A_NC",  "6m_NC"))
-cc_C_A_vs_6m  <- merge_two_cellchat(cc_A_C,   cc_6m_C,  c("A_C",   "6m_C"))
-comp_list <- list(
-  A_NC_vs_C  = cc_A_NC_vs_C,
-  `6m_NC_vs_C` = cc_6m_NC_vs_C,
-  NC_A_vs_6m = cc_NC_A_vs_6m,
-  C_A_vs_6m  = cc_C_A_vs_6m
-)
-```
-
-```{r, fig.width=12, fig.height=12}
-ggA1 <- rankNet(cc_A_NC_vs_C,  mode="comparison", measure="weight", stacked=TRUE,  do.stat=FALSE)
-ggA2 <- rankNet(cc_A_NC_vs_C,  mode="comparison", measure="weight", stacked=FALSE, do.stat=FALSE)
-gg6_1 <- rankNet(cc_6m_NC_vs_C, mode="comparison", measure="weight", stacked=TRUE,  do.stat=FALSE)
-gg6_2 <- rankNet(cc_6m_NC_vs_C, mode="comparison", measure="weight", stacked=FALSE, do.stat=FALSE)
-
-(ggA1 + ggA2) / (gg6_1 + gg6_2)
-```
-
-
-```{r, fig.width=12, fig.height=9}
-library(CellChat)
-library(ComplexHeatmap)
-library(grid)  # for unit()
-
-# Helper: make two comparable heatmaps (same pathway set) side-by-side
 make_pair_ht <- function(cc_left, cc_right, left_title, right_title,
-                         pattern = "outgoing",
-                         width = 5, height = 6, gap_cm = 0.5) {
-  
-  # Union of pathways to ensure same rows appear in both heatmaps
+                         pattern = "outgoing", width = 5, height = 6, gap_cm = 0.5) {
   pathway.union <- union(cc_left@netP$pathways, cc_right@netP$pathways)
-
-  ht_left <- netAnalysis_signalingRole_heatmap(
-    cc_left,
-    pattern   = pattern,
-    signaling = pathway.union,
-    title     = left_title,
-    width     = width,
-    height    = height
-  )
-
-  ht_right <- netAnalysis_signalingRole_heatmap(
-    cc_right,
-    pattern   = pattern,
-    signaling = pathway.union,
-    title     = right_title,
-    width     = width,
-    height    = height
-  )
-
+  ht_left  <- netAnalysis_signalingRole_heatmap(cc_left,  pattern = pattern,
+    signaling = pathway.union, title = left_title,  width = width, height = height)
+  ht_right <- netAnalysis_signalingRole_heatmap(cc_right, pattern = pattern,
+    signaling = pathway.union, title = right_title, width = width, height = height)
   draw(ht_left + ht_right, ht_gap = unit(gap_cm, "cm"))
-  
-  invisible(list(ht_left = ht_left, ht_right = ht_right, pathways = pathway.union))
 }
 
-# Panels C–D
-# Acute: A_C and A_NC side-by-side
-acute_ht <- make_pair_ht(
-  cc_left    = cc_A_NC,
-  cc_right   = cc_A_C,
-  left_title = "A_NC",
-  right_title= "A_C",
-  pattern    = "outgoing",
-  width      = 10, height = 12, gap_cm = 1.5
-)
+# --- Note helpers ---
+# Filtering method used for pfilt:
+#   CellChat permutation test (100 permutations per LR pair per sender-receiver pair),
+#   p <= 0.05 on communication probability.
+# Between-condition statistical test:
+#   Wilcoxon rank-sum on per-sample values (two-sided, normal approximation),
+#   BH correction for multiple testing where applied.
 
-# 6 months: 6m_C and 6m_NC side-by-side
-m6_ht <- make_pair_ht(
-  cc_left    = cc_6m_NC,
-  cc_right   = cc_6m_C,
-  left_title = "6m_NC",
-  right_title= "6m_C",
-  pattern    = "outgoing",
-  width      = 10, height = 12, gap_cm = 1.5
-)
+FILT_METHOD <- paste0("CellChat permutation test on communication probability",
+                      " (100 permutations per ligand\u2013receptor pair per sender\u2013receiver pair)")
 
-```
+# --- Per-sample stats infrastructure ---
 
-```{r merged, fig.width=12, fig.height=10}
-for (cc_name in names(comp_list)) {
-  cc <- comp_list[[cc_name]]
-  outdir <- file.path(plots_outdir, "comparisons", cc_name)
-  dir.create(outdir, showWarnings = F, recursive = T)
-  # # Comparing the total number of interactions
-  gg1 <- compareInteractions(cc, show.legend = F, group = c(1,2)) +
-     ggtitle(paste0(cc_name, ": Number of interactions"))
-  print(gg1)
-  ggsave(filename = file.path(outdir,
-         paste0(cc_name, "_compareInteractions_count.pdf")),
-         plot = gg1, width = 7, height = 5)
-  # Comparing the total interaction strength
-  gg2 <- compareInteractions(cc, show.legend = F, group = c(1,2),
-                             measure="weight") +
-  ggtitle(paste0(cc_name, ": Interaction strength"))
-  print(gg2)
-  ggsave(filename = file.path(outdir,
-         paste0(cc_name, "_compareInteractions_weight.pdf")),
-    plot = gg2, width = 7, height = 5)
-  # Examine the differential number of interactions
-  op <- par(mar = c(2, 2, 6, 2), xpd = NA)
-  netVisual_diffInteraction(cc, weight.scale = T)
-  title(paste0(cc_name, ": Differential number of interactions"), cex.main = 1.4, line = 2)
-  grDevices::pdf(file.path(outdir,
-    paste0(cc_name, "_diffInteraction_count.pdf")),
-    width = 12, height = 10)
-  dev.off()
-  # Examine the differential interaction strengths
-  op <- par(mar = c(2, 2, 6, 2), xpd = NA)
-  netVisual_diffInteraction(cc, weight.scale = T, measure = "weight")
-  title(paste0(cc_name, ": Differential interaction strengths"), cex.main = 1.4, line = 2)
-  grDevices::pdf(file.path(outdir,
-    paste0(cc_name, "_diffInteraction_weight.pdf")),
-    width = 12, height = 10)
-  dev.off()
-  # heatmap of differential number of interactions
-  plt <- netVisual_heatmap(cc)
-  title <- paste0(cc_name, ": Differential interaction counts")
-  draw_grid_plot(plt, title)
-  pdf(file.path(outdir, paste0(cc_name, "_diff_heatmap_count.pdf")),
-      width = 7, height = 7)
-  draw_grid_plot(plt, title)
-  dev.off()
-
-  # heatmap of differential interaction strengths
-  plt <- netVisual_heatmap(cc, measure = "weight")
-  title <- paste0(cc_name, ": Differential interaction weights")
-  draw_grid_plot(plt, title)
-  pdf(file.path(outdir, paste0(cc_name, "_diff_heatmap_weight.pdf")),
-      width = 7, height = 7)
-  draw_grid_plot(plt, title)
-  dev.off()
-}
-```
-
-# Cell groups
-
-```{r index_cell_groups}
-idx <- list()
-idx[["B_cells"]]           <- c(1,2,3,4,5)
-idx[["CD4_T_cells"]]       <- c(6,7,8,9,10,11,12,13)
-idx[["CD8_T_cells"]]       <- c(14,15,16,17)
-idx[["GD_T_cells"]]        <- c(18,19)
-idx[["Dendritic_cells"]]   <- c(22,23)
-idx[["Monocytes"]]         <- c(24,25,26)
-idx[["Other_cells"]]       <- c(20, 21, 27)
-
-group.celltype <- c(
+# group.celltype.vec: maps positions 1:27 (cell types in level order) to 9 cell groups.
+# Must match the group.celltype vector used in compute_cellchat.Rmd.
+group.celltype.vec <- c(
   rep("B cells",          5),
   rep("CD4+ T cells",     8),
   rep("CD8+ T cells",     4),
@@ -324,136 +105,760 @@ group.celltype <- c(
   rep("Monocytes",        3),
   rep("Progenitor cells", 1)
 )
-```
 
-```{r merge_interactions}
-mergeInteractions_inplace <- function(cc, group.celltype) {
-  cc_g <- mergeInteractions(cc, group.celltype)
-  cc_g@net$count  <- cc_g@net$count.merged
-  cc_g@net$weight <- cc_g@net$weight.merged
-  cc_g@net$count.merged  <- NULL
-  cc_g@net$weight.merged <- NULL
-  cc_g@idents <- factor(group.celltype[as.integer(cc@idents)],
-                      levels = unique(group.celltype))
-  return(cc_g)
+# Extract per-sample net matrices, subset to cell types common across all samples.
+# Returns NULL if <2 samples per group.
+.persample_mats <- function(measure = "count") {
+  ps1 <- so@misc[["cellchat_per_sample"]][[nm1]]
+  ps2 <- so@misc[["cellchat_per_sample"]][[nm2]]
+  if (is.null(ps1) || is.null(ps2) || length(ps1) < 2 || length(ps2) < 2)
+    return(NULL)
+  all_ps      <- c(ps1, ps2)
+  common_cts  <- Reduce(intersect, lapply(all_ps, function(cc) levels(cc@idents)))
+  if (length(common_cts) < 2) return(NULL)
+  get_mat <- function(cc) {
+    idx <- match(common_cts, levels(cc@idents))
+    m   <- if (measure == "count") cc@net$count else cc@net$weight
+    structure(m[idx, idx, drop = FALSE], dimnames = list(common_cts, common_cts))
+  }
+  list(mats1 = lapply(ps1, get_mat), mats2 = lapply(ps2, get_mat),
+       cts = common_cts, n1 = length(ps1), n2 = length(ps2))
 }
 
-cc_A_NC_g  = mergeInteractions_inplace(cc_A_NC, group.celltype)
-cc_6m_NC_g = mergeInteractions_inplace(cc_6m_NC, group.celltype)
-cc_A_C_g   = mergeInteractions_inplace(cc_A_C, group.celltype)
-cc_6m_C_g  = mergeInteractions_inplace(cc_6m_C, group.celltype)
+# Aggregate per-sample ungrouped matrices to the 9 cell-group level.
+.persample_grouped_mats <- function(measure = "count") {
+  d <- .persample_mats(measure)
+  if (is.null(d)) return(NULL)
+  ref_lev  <- levels(so@misc$cc$all[[nm1]]@idents)   # 27 full reference levels
+  pos      <- match(d$cts, ref_lev)
+  grps     <- group.celltype.vec[pos]
+  uniq_grps <- unique(group.celltype.vec)             # 9 groups in order
+  agg <- function(m) {
+    out <- matrix(0, length(uniq_grps), length(uniq_grps),
+                  dimnames = list(uniq_grps, uniq_grps))
+    for (i in seq_along(grps))
+      for (j in seq_along(grps))
+        out[grps[i], grps[j]] <- out[grps[i], grps[j]] + m[i, j]
+    out
+  }
+  list(mats1 = lapply(d$mats1, agg), mats2 = lapply(d$mats2, agg),
+       cts = uniq_grps, n1 = d$n1, n2 = d$n2)
+}
 
-grouped_list <- list(
-  A_NC   = cc_A_NC_g,
-  A_C    = cc_A_C_g,
-  `6m_NC` = cc_6m_NC_g,
-  `6m_C`  = cc_6m_C_g
-)
+.fmt_p <- function(p) if (is.null(p) || is.na(p)) "NA" else if (p < 0.001) sprintf("%.2e", p) else sprintf("%.3f", p)
+.stars <- function(p) if (is.null(p) || is.na(p)) "" else if (p < 0.001) "***" else if (p < 0.01) "**" else if (p < 0.05) "*" else "ns"
+
+# Wilcoxon rank-sum on per-sample totals (for Fig8-9, Fig18-19).
+.wilcox_total <- function(measure = "count") {
+  d <- .persample_mats(measure)
+  if (is.null(d)) return(NULL)
+  t1 <- sapply(d$mats1, sum)
+  t2 <- sapply(d$mats2, sum)
+  wt <- suppressWarnings(wilcox.test(t1, t2, exact = FALSE))
+  list(stat = wt$statistic, p = wt$p.value, n1 = d$n1, n2 = d$n2,
+       med1 = median(t1), med2 = median(t2))
+}
+
+# Wilcoxon rank-sum per sender-receiver pair with BH correction (for Fig10-13, Fig20-23).
+.wilcox_perpair <- function(measure = "count", is_grouped = FALSE) {
+  d <- if (is_grouped) .persample_grouped_mats(measure) else .persample_mats(measure)
+  if (is.null(d)) return(NULL)
+  n    <- length(d$cts)
+  pmat <- matrix(NA_real_, n, n, dimnames = list(d$cts, d$cts))
+  for (i in seq_len(n)) for (j in seq_len(n)) {
+    v1 <- sapply(d$mats1, function(m) m[i, j])
+    v2 <- sapply(d$mats2, function(m) m[i, j])
+    if (any(c(v1, v2) != 0))
+      pmat[i, j] <- tryCatch(
+        suppressWarnings(wilcox.test(v1, v2, exact = FALSE)$p.value),
+        error = function(e) NA_real_)
+  }
+  tested <- !is.na(pmat)
+  pmat_adj <- pmat
+  if (any(tested))
+    pmat_adj[tested] <- p.adjust(pmat[tested], method = "BH")
+  list(p.adj = pmat_adj, cts = d$cts, n1 = d$n1, n2 = d$n2,
+       n_tested = sum(tested))
+}
+
+# Wilcoxon rank-sum per pathway (for rankNet label coloring).
+# Returns: list(p.adj = named vector, n1, n2) or NULL if not enough samples.
+.wilcox_perpathway <- function(pathways = NULL) {
+  ps1 <- so@misc[["cellchat_per_sample"]][[nm1]]
+  ps2 <- so@misc[["cellchat_per_sample"]][[nm2]]
+  if (is.null(ps1) || is.null(ps2) || length(ps1) < 2 || length(ps2) < 2)
+    return(NULL)
+  # All pathways from either condition
+  all_pw <- unique(c(
+    unlist(lapply(ps1, function(x) x@netP$pathways)),
+    unlist(lapply(ps2, function(x) x@netP$pathways))
+  ))
+  if (!is.null(pathways)) all_pw <- intersect(all_pw, pathways)
+  if (length(all_pw) == 0) return(NULL)
+  # Per-sample total signaling weight for each pathway
+  get_pw_strength <- function(cc, pw) {
+    if (pw %in% cc@netP$pathways) {
+      prob <- cc@net$weight  # [sender, receiver] already summed over LR in @net
+      # Actually use @netP$prob which is [sender, receiver, pathway]
+      pw_idx <- which(dimnames(cc@netP$prob)[[3]] == pw)
+      if (length(pw_idx) == 0) return(0)
+      sum(cc@netP$prob[,,pw_idx])
+    } else 0
+  }
+  pvals <- sapply(all_pw, function(pw) {
+    v1 <- sapply(ps1, get_pw_strength, pw = pw)
+    v2 <- sapply(ps2, get_pw_strength, pw = pw)
+    if (all(v1 == 0) && all(v2 == 0)) return(NA_real_)
+    tryCatch(suppressWarnings(wilcox.test(v1, v2, exact=FALSE)$p.value),
+             error=function(e) NA_real_)
+  })
+  tested    <- !is.na(pvals)
+  list(p = pvals, n1 = length(ps1), n2 = length(ps2),
+       n_tested = sum(tested), n_sig = sum(pvals <= 0.05, na.rm=TRUE))
+}
+
+# Post-process rankNet ggplot: recolor y-axis (pathway) labels by significance.
+# gg        — ggplot returned by rankNet
+# pw_stats  — result of .wilcox_perpathway()
+# thresh    — significance threshold (default 0.05)
+.color_ranknet_labels <- function(gg, pw_stats, thresh = 0.05) {
+  if (is.null(pw_stats)) return(gg)
+  padj <- pw_stats$p
+  gg + theme(axis.text.y = ggplot2::element_text(
+    colour = sapply(levels(gg$data$name %||% factor(gg$data$name)), function(pw) {
+      p <- padj[pw]
+      if (is.na(p) || p > thresh) "black"
+      else {
+        # Determine direction from data
+        d <- gg$data[gg$data$name == pw, ]
+        if (nrow(d) == 0) return("black")
+        g1 <- sum(d$contribution[d$group == levels(d$group)[1]], na.rm=TRUE)
+        g2 <- sum(d$contribution[d$group == levels(d$group)[2]], na.rm=TRUE)
+        if (g1 >= g2) "#E41A1C" else "#377EB8"  # red=nm1 stronger, blue=nm2
+      }
+    })
+  ))
+}
+
+# Formatted note for the total Wilcoxon test result.
+.total_test_note <- function(measure = "count") {
+  wt <- .wilcox_total(measure)
+  if (is.null(wt)) {
+    cat("Between-condition test: not available (need \u22652 samples per group).\n\n")
+  } else {
+    unit <- if (measure == "count") "total ligand\u2013receptor (LR) interaction count" else "total communication probability"
+    sig  <- wt$p < 0.05
+    sig_str <- if (sig) {
+      paste0("statistically significant (", .stars(wt$p), ")")
+    } else {
+      "not statistically significant"
+    }
+    cat(paste0(
+      "Between-condition test (", nm1, " vs ", nm2, "): ",
+      "Wilcoxon rank-sum on per-sample ", unit,
+      " (n\u2081=", wt$n1, ", n\u2082=", wt$n2, " samples; ",
+      "W=", wt$stat, ", p=", .fmt_p(wt$p),
+      "; median ", round(wt$med1, 1), " vs ", round(wt$med2, 1), "). ",
+      "The observed difference between the two conditions is ",
+      sig_str, " according to this test.\n\n"
+    ))
+  }
+}
+
+# Per-sample barplot: one bar per sample, colored by condition.
+# Draws and prints the ggplot, returns it invisibly.
+.persample_barplot <- function(measure = "count", is_grouped = FALSE) {
+  d <- if (is_grouped) .persample_grouped_mats(measure) else .persample_mats(measure)
+  if (is.null(d)) {
+    cat("Per-sample barplot: not available (need \u22652 samples per group).\n\n")
+    return(invisible(NULL))
+  }
+  unit  <- if (measure == "count") "LR interaction count" else "communication probability"
+  cond_colors <- c(nm1, nm2)
+  vals1 <- sapply(d$mats1, sum)
+  vals2 <- sapply(d$mats2, sum)
+  # Sort by condition (nm1 first, then nm2), preserving sample order within each
+  df <- data.frame(
+    value     = c(vals1, vals2),
+    sample    = factor(c(names(d$mats1), names(d$mats2)),
+                       levels = c(names(d$mats1), names(d$mats2))),
+    condition = factor(c(rep(nm1, d$n1), rep(nm2, d$n2)), levels = c(nm1, nm2))
+  )
+  cond_colors <- setNames(c("#E41A1C", "#377EB8"), c(nm1, nm2))
+  wt <- suppressWarnings(wilcox.test(vals1, vals2, exact = FALSE))
+  p_label <- paste0("Wilcoxon p = ", .fmt_p(wt$p.value))
+  gg <- ggplot(df, aes(x = sample, y = value, fill = condition)) +
+    geom_col(width = 0.7) +
+    scale_fill_manual(values = cond_colors) +
+    labs(x = NULL, y = unit, fill = "Condition",
+         title = paste0(params$pair, " (", sfx, "): ", unit, " per sample"),
+         caption = p_label) +
+    theme_bw(base_size = 11) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  print(gg)
+  cat(paste0(
+    "Total ", unit, " for each individual sample. Samples are colored by condition (",
+    nm1, " in red, ", nm2, " in blue). ",
+    "The spread of bars within each condition shows within-group variability. ",
+    "Between-condition test: Wilcoxon rank-sum, p = ", .fmt_p(wt$p.value), ".\n\n"
+  ))
+  invisible(gg)
+}
+
+# Per-pair test note (text only, for chord diagrams Fig10-11, Fig20-21).
+.perpair_chord_note <- function(measure = "count", is_grouped = FALSE) {
+  wp <- .wilcox_perpair(measure, is_grouped)
+  pair_type <- if (is_grouped) "cell-group" else "cell-type"
+  if (is.null(wp)) {
+    cat(paste0("*Per-", pair_type, "-pair test: not available",
+               " (need \u22652 samples per group).*\n\n"))
+    return(invisible(NULL))
+  }
+  pmat   <- wp$p.adj
+  n_sig  <- sum(pmat <= 0.05, na.rm = TRUE)
+  if (n_sig == 0) {
+    cat(paste0(
+      "*Per-", pair_type, "-pair Wilcoxon rank-sum with BH correction ",
+      "(n\u2081=", wp$n1, ", n\u2082=", wp$n2, " samples, ",
+      wp$n_tested, " pairs tested): no significant pairs (p.adj\u00a0>\u00a00.05).*\n\n"
+    ))
+  } else {
+    sig_idx  <- which(pmat <= 0.05, arr.ind = TRUE)
+    pair_str <- apply(sig_idx, 1, function(r)
+      paste0(rownames(pmat)[r[1]], "\u2192", colnames(pmat)[r[2]],
+             "\u00a0", .stars(pmat[r[1], r[2]])))
+    cat(paste0(
+      "*Per-", pair_type, "-pair Wilcoxon rank-sum with BH correction ",
+      "(n\u2081=", wp$n1, ", n\u2082=", wp$n2, " samples, ",
+      wp$n_tested, " pairs tested): ",
+      n_sig, " significant pair(s): ",
+      paste(pair_str, collapse = "; "), ".*\n\n"
+    ))
+  }
+}
+
+# Significance heatmap figure for differential heatmaps (Fig12-13, Fig22-23).
+# Draws a -log10(p.adj) heatmap with asterisk overlay and returns text note.
+.sig_heatmap_fig <- function(measure = "count", is_grouped = FALSE) {
+  wp <- .wilcox_perpair(measure, is_grouped)
+  pair_type <- if (is_grouped) "cell-group" else "cell-type"
+  if (is.null(wp)) {
+    cat(paste0("*Per-", pair_type, "-pair significance heatmap: not available",
+               " (need \u22652 samples per group).*\n\n"))
+    return(invisible(NULL))
+  }
+  pmat  <- wp$p.adj
+  n_sig <- sum(pmat <= 0.05, na.rm = TRUE)
+  # Text note
+  cat(paste0(
+    "*Per-", pair_type, "-pair Wilcoxon rank-sum with BH correction ",
+    "(n\u2081=", wp$n1, ", n\u2082=", wp$n2, " samples, ",
+    wp$n_tested, " pairs tested): ",
+    n_sig, "/", wp$n_tested, " significant at p.adj\u00a0\u22640.05.*\n\n"
+  ))
+  # Build significance heatmap
+  logp      <- matrix(0, nrow(pmat), ncol(pmat), dimnames = dimnames(pmat))
+  logp[!is.na(pmat)] <- -log10(pmax(pmat[!is.na(pmat)], 1e-300))
+  stars_mat <- matrix("", nrow(pmat), ncol(pmat), dimnames = dimnames(pmat))
+  for (i in seq_len(nrow(pmat))) for (j in seq_len(ncol(pmat)))
+    if (!is.na(pmat[i, j])) stars_mat[i, j] <- .stars(pmat[i, j])
+  thresh  <- -log10(0.05)
+  max_val <- max(logp, na.rm = TRUE)
+  col_fn  <- circlize::colorRamp2(
+    c(0, thresh, max(thresh + 0.01, max_val)),
+    c("white", "orange", "red"))
+  ht <- Heatmap(
+    logp, name = "-log10(p.adj)",
+    col  = col_fn,
+    cell_fun = function(j, i, x, y, width, height, fill) {
+      s <- stars_mat[i, j]
+      if (nchar(s) > 0)
+        grid.text(s, x, y, gp = gpar(fontsize = if (is_grouped) 9 else 6))
+    },
+    cluster_rows = FALSE, cluster_columns = FALSE,
+    row_names_gp    = gpar(fontsize = if (is_grouped) 8 else 6),
+    column_names_gp = gpar(fontsize = if (is_grouped) 8 else 6),
+    column_title    = paste0(nm1, " vs ", nm2, ": significance (", pair_type, " pairs)"),
+    heatmap_legend_param = list(
+      title_gp  = gpar(fontsize = 8),
+      labels_gp = gpar(fontsize = 7))
+  )
+  draw(ht)
+  invisible(NULL)
+}
+
+.cc_stats <- function(cc_obj, cc_obj_all = NULL, is_grouped = FALSE) {
+  pair_label  <- if (is_grouped) "cell-group" else "cell-type"
+  n_levels    <- nlevels(cc_obj@idents)
+  max_pairs   <- n_levels * n_levels
+  n_lr        <- sum(cc_obj@net$count)
+  n_pairs     <- sum(cc_obj@net$count > 0)
+  n_pw        <- length(cc_obj@netP$pathways)
+  if (!is.null(cc_obj_all)) {
+    list(n_lr = n_lr, n_pairs = n_pairs, n_pw = n_pw,
+         n_lr_all = sum(cc_obj_all@net$count),
+         n_pairs_all = sum(cc_obj_all@net$count > 0),
+         n_pw_all = length(cc_obj_all@netP$pathways),
+         max_pairs = max_pairs, pair_label = pair_label)
+  } else {
+    list(n_lr = n_lr, n_pairs = n_pairs, n_pw = n_pw,
+         n_lr_all = NULL, n_pairs_all = NULL, n_pw_all = NULL,
+         max_pairs = max_pairs, pair_label = pair_label)
+  }
+}
+
+# For single-condition overview heatmaps (Fig1-4, Fig14-17):
+# netVisual_heatmap — matrix of LR count or comm. probability per sender-receiver pair.
+interaction_note <- function(cc_obj, nm, cc_obj_all = NULL, is_grouped = FALSE) {
+  s <- .cc_stats(cc_obj, cc_obj_all, is_grouped)
+  note <- if (sfx == "pfilt" && !is.null(cc_obj_all)) {
+    n_filt_lr <- s$n_lr_all - s$n_lr
+    n_filt_pw <- s$n_pw_all - s$n_pw
+    pct_lr    <- paste0(round(100 * n_filt_lr / max(s$n_lr_all, 1)), "%")
+    paste0(
+      "*", nm, ":* ",
+      "*ligand\u2013receptor (LR) interactions:* ", s$n_lr, "/", s$n_lr_all, " retained (",
+        n_filt_lr, " removed, ", pct_lr, "); ",
+      "*active ", s$pair_label, " pairs:* ", s$n_pairs, "/", s$n_pairs_all,
+        " (", s$n_pairs_all - s$n_pairs, " lost all significant interactions); ",
+      "*pathways:* ", s$n_pw, "/", s$n_pw_all,
+        " (", n_filt_pw, " lost all significant ligand\u2013receptor pairs). ",
+      "*Filter:* p\u00a0\u22640.05, ", FILT_METHOD, "."
+    )
+  } else {
+    paste0(
+      "*", nm, ":* ",
+      "*ligand\u2013receptor (LR) interactions:* ", s$n_lr, "; ",
+      "*active ", s$pair_label, " pairs:* ", s$n_pairs, "/", s$max_pairs, "; ",
+      "*pathways:* ", s$n_pw, ". ",
+      "*No p-value filtering applied.*"
+    )
+  }
+  cat(paste0(note, "\n\n"))
+}
+
+# For signaling role heatmaps (Fig6-7):
+# netAnalysis_signalingRole_heatmap — rows: pathways (union of both conditions),
+# cols: cell types, values: outgoing/incoming contribution score.
+signaling_role_note <- function(pattern) {
+  pw1   <- cc[[nm1]]@netP$pathways
+  pw2   <- cc[[nm2]]@netP$pathways
+  pw_un <- union(pw1, pw2)
+  filt_txt <- if (sfx == "pfilt")
+    paste0("pathways retained after p\u00a0\u22640.05 filtering (", FILT_METHOD, ")")
+  else
+    "all pathways, no p-value filtering"
+  cat(paste0(
+    "*Rows:* union of ", length(pw_un), " pathways (",
+    nm1, ": ", length(pw1), "; ", nm2, ": ", length(pw2), "). ",
+    "*Columns:* cell types. ",
+    "*Values:* ", pattern, " signaling contribution score per cell type per pathway ",
+    "(from netAnalysis_computeCentrality on communication probability). ",
+    "*Pathway set:* ", filt_txt, ".\n\n"
+  ))
+  pair_note()
+}
+
+# For compareInteractions bar charts (Fig8-9, Fig18-19):
+# Shows total LR count or total communication probability per condition (one bar each).
+# Statistical test: Wilcoxon rank-sum on per-sample totals.
+compare_note <- function(measure = "count", is_grouped = FALSE) {
+  obj1 <- if (is_grouped) grouped[[nm1]] else cc[[nm1]]
+  obj2 <- if (is_grouped) grouped[[nm2]] else cc[[nm2]]
+  obj1_all <- if (sfx == "pfilt") (if (is_grouped) grouped_all[[nm1]] else cc_all[[nm1]]) else NULL
+  obj2_all <- if (sfx == "pfilt") (if (is_grouped) grouped_all[[nm2]] else cc_all[[nm2]]) else NULL
+  unit <- if (measure == "count") "total ligand\u2013receptor (LR) interactions" else "total communication probability"
+  cat(paste0(
+    "*Bars show ", unit, " per condition (summed across all ",
+    if (is_grouped) "cell-group" else "cell-type", " pairs).*\n\n"
+  ))
+  .total_test_note(measure)
+  interaction_note(obj1, nm1, obj1_all, is_grouped)
+  interaction_note(obj2, nm2, obj2_all, is_grouped)
+}
+
+# For differential chord/arrow plots (Fig10-11, Fig20-21):
+# netVisual_diffInteraction — arrow/edge direction and thickness encode
+# the signed difference: positive (red) = more in nm1, negative (blue) = more in nm2.
+# Statistical test: Wilcoxon rank-sum per sender-receiver pair with BH correction.
+diff_chord_note <- function(measure = "count", is_grouped = FALSE) {
+  unit <- if (measure == "count") "ligand\u2013receptor (LR) interaction count" else "communication probability"
+  filt_note <- if (sfx == "pfilt")
+    " Only ligand\u2013receptor interactions significant by CellChat permutation test (p\u00a0\u22640.05) are included."
+  else ""
+  cat(paste0(
+    "Differential ", unit, " (", nm1, " \u2212 ", nm2, ") per ",
+    if (is_grouped) "cell-group" else "cell-type",
+    " pair. Red/outgoing arrows: higher in ", nm1,
+    "; blue/outgoing arrows: higher in ", nm2,
+    ". Edge width scaled by magnitude.", filt_note, "\n\n"
+  ))
+  if (is_grouped) grouped_pair_note() else pair_note()
+}
+
+# For differential heatmaps (Fig12-13, Fig22-23):
+# netVisual_heatmap(merged_cc) — matrix of signed difference per sender-receiver pair.
+diff_heatmap_note <- function(measure = "count", is_grouped = FALSE) {
+  unit <- if (measure == "count") "ligand\u2013receptor (LR) interaction count" else "communication probability"
+  filt_note <- if (sfx == "pfilt")
+    " Only ligand\u2013receptor interactions significant by CellChat permutation test (p\u00a0\u22640.05) are included."
+  else ""
+  cat(paste0(
+    "Differential ", unit, " per ",
+    if (is_grouped) "cell-group" else "cell-type",
+    " pair (", nm1, " \u2212 ", nm2,
+    "). Positive (red): higher in ", nm1,
+    "; negative (blue): higher in ", nm2,
+    ".", filt_note, "\n\n"
+  ))
+  if (is_grouped) grouped_pair_note() else pair_note()
+}
+
+pair_note <- function() {
+  interaction_note(cc[[nm1]], nm1, if (sfx == "pfilt") cc_all[[nm1]] else NULL,
+                   is_grouped = FALSE)
+  interaction_note(cc[[nm2]], nm2, if (sfx == "pfilt") cc_all[[nm2]] else NULL,
+                   is_grouped = FALSE)
+}
+
+grouped_note <- function(nm) {
+  interaction_note(grouped[[nm]], nm, if (sfx == "pfilt") grouped_all[[nm]] else NULL,
+                   is_grouped = TRUE)
+}
+
+grouped_pair_note <- function() {
+  grouped_note(nm1)
+  grouped_note(nm2)
+}
 ```
 
-# Single grouped CellChat objects
+```{r load_so}
+so <- readRDS(file = paste0(input_var_dir, params$input_rds))
+cc          <- so@misc$cc[[sfx]]
+cc_all      <- so@misc$cc$all
+merged_cc   <- so@misc$cc_merged[[sfx]][[params$pair]]
+grouped     <- so@misc$cc_grouped[[sfx]]
+grouped_all <- so@misc$cc_grouped$all
+grouped_merged <- so@misc$cc_grouped_merged[[sfx]][[params$pair]]
+ranknet_obj <- so@misc$cc_ranknet_merged[[params$pair]]
+has_ranknet_stats <- !is.null(ranknet_obj)
+```
 
-```{r grouped_cellchat_plots}
-for (nm in names(grouped_list)) {
-  cc <- grouped_list[[nm]]
-  
+```{r report_title, results='asis'}
+pair_labels <- c(
+  A_NC_vs_C  = "Non-Chronic Acute vs Chronic Acute",
+  `6m_NC_vs_C` = "Non-Chronic 6 months vs Chronic 6 months",
+  NC_A_vs_6m = "Non-Chronic Acute vs Non-Chronic 6 months",
+  C_A_vs_6m  = "Chronic Acute vs Chronic 6 months"
+)
+sfx_labels <- c(all = "unfiltered", pfilt = "p-value filtered")
+cat(paste0("# ", pair_labels[[params$pair]], " - ", sfx_labels[[params$sfx]], "\n\n"))
+```
+
+# Single condition overviews
+
+## Overview heatmaps
+
+```{r overview_render, include=FALSE}
+overview_items <- list()
+for (nm in c(nm1, nm2)) {
+  outdir <- file.path(plots_outdir, "overview", nm)
+  dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
+  for (measure in c("count", "weight")) {
+    lbl_m    <- if (measure == "count") "Interaction counts" else "Interaction weight"
+    fstem    <- paste0(nm, ".", sfx, ".heatmap_", measure)
+    png_path <- file.path(outdir, paste0(fstem, ".png"))
+    pdf_path <- file.path(outdir, paste0(fstem, ".pdf"))
+    ttl      <- paste0(nm, " (", sfx, "): ", lbl_m)
+    plt      <- if (measure == "count") netVisual_heatmap(cc[[nm]]) else
+                                        netVisual_heatmap(cc[[nm]], measure = "weight")
+    png(png_path, width = 700, height = 700)
+    draw_grid_plot(plt, ttl)
+    invisible(dev.off())
+    pdf(pdf_path, width = 7, height = 7)
+    draw_grid_plot(plt, ttl)
+    invisible(dev.off())
+    overview_items[[length(overview_items) + 1]] <-
+      list(nm = nm, measure = measure, lbl = lbl_m, png = png_path)
+  }
+}
+```
+
+```{r overview_display, results='asis'}
+for (item in overview_items) {
+  .fig_counter <<- .fig_counter + 1L
+  lbl <- paste0(params$pair, ".", sfx, ".Fig", .fig_counter,
+                " \u2014 ", item$nm, ": ", item$lbl)
+  cat(paste0("\n\n### ", lbl, "\n\n",
+             "![](", item$png, ")\n\n"))
+  interaction_note(cc[[item$nm]], item$nm,
+                   if (sfx == "pfilt") cc_all[[item$nm]] else NULL)
+}
+```
+
+# Comparison: `r nm1` vs `r nm2`
+
+## Pathway ranking (rankNet)
+
+```{r ranknet, fig.width=12, fig.height=7, results='asis'}
+pw <- if (sfx == "pfilt") union(cc[[nm1]]@netP$pathways, cc[[nm2]]@netP$pathways) else NULL
+n_pw_all   <- length(union(so@misc$cc$all[[nm1]]@netP$pathways,
+                            so@misc$cc$all[[nm2]]@netP$pathways))
+n_pw_shown <- if (is.null(pw)) n_pw_all else length(pw)
+n1 <- length(so@misc[["cellchat_per_sample"]][[nm1]])
+n2 <- length(so@misc[["cellchat_per_sample"]][[nm2]])
+
+# Always use merged_cc for the plot (clean condition-level legend: nm1 / nm2).
+# Per-sample Wilcoxon rank-sum is computed separately and used to recolor pathway labels.
+gg1 <- rankNet(merged_cc, mode = "comparison", measure = "weight",
+               stacked = TRUE,  do.stat = FALSE, signaling = pw, thresh = thresh)
+gg2 <- rankNet(merged_cc, mode = "comparison", measure = "weight",
+               stacked = FALSE, do.stat = FALSE, signaling = pw, thresh = thresh)
+
+# Per-pathway Wilcoxon across samples → color labels red/blue/black
+pw_stats <- .wilcox_perpathway(pathways = pw)
+if (!is.null(pw_stats)) {
+  gg1 <- .color_ranknet_labels(gg1, pw_stats, thresh = 0.05)
+  gg2 <- .color_ranknet_labels(gg2, pw_stats, thresh = 0.05)
+}
+
+fig_label(paste0(params$pair, ": Pathway ranking"))
+print((gg1 + gg2) +
+  plot_annotation(title = paste0(params$pair, ": Pathway ranking (", sfx, ")")))
+
+# --- Note ---
+pw_note <- if (sfx == "pfilt") {
+  paste0("Pathways shown: ", n_pw_shown,
+         " with at least one significant ligand\u2013receptor interaction ",
+         "(CellChat permutation test, p\u00a0\u22640.05; ",
+         n_pw_all - n_pw_shown, " pathways removed as entirely non-significant)")
+} else {
+  paste0("Pathways shown: ", n_pw_shown, " (all pathways, unfiltered)")
+}
+panel_note <- paste0(
+  "Left panel: relative information flow per pathway per condition. ",
+  "Right panel: absolute information flow (communication probability).")
+if (!is.null(pw_stats)) {
+  stat_note <- paste0(
+    "Between-condition test: Wilcoxon rank-sum comparing per-sample pathway signaling strength ",
+    "across ", nm1, " (n\u2081=", pw_stats$n1, " samples) vs ", nm2, " (n\u2082=", pw_stats$n2, " samples). ",
+    "Raw p-values are reported without multiple-testing correction: ",
+    "with only ", pw_stats$n1, "\u2013", pw_stats$n2, " samples per group and ",
+    pw_stats$n_tested, " pathways tested, BH correction is too conservative ",
+    "as the Wilcoxon test has limited power at this sample size. ",
+    "Raw p\u00a0<\u00a00.05 is used as an exploratory threshold; ",
+    pw_stats$n_sig, " pathway(s) pass this threshold. ",
+    "Pathway label colors: **red** = stronger in ", nm1, " (raw p\u00a0<\u00a00.05)",
+    "; **blue** = stronger in ", nm2, " (raw p\u00a0<\u00a00.05)",
+    "; black = raw p\u00a0\u22650.05 (not significant at this threshold).")
+} else {
+  stat_note <- if (n1 >= 2 && n2 >= 2) {
+    "Between-condition test: could not be computed."
+  } else {
+    paste0("Between-condition test: not available (need \u22652 samples per group; ",
+           "n\u2081=", n1, ", n\u2082=", n2, "). ",
+           "Label colors reflect relative magnitude only: **red** = higher in ", nm1,
+           "; **blue** = higher in ", nm2, " (no significance threshold).")
+  }
+}
+cat(paste0("*", pw_note, ". ", panel_note, " ", stat_note, "*\n\n"))
+```
+
+## Signaling role heatmaps
+
+```{r signaling_role_heatmaps, fig.width=12, fig.height=9, results='asis'}
+fig_label(paste0(params$pair, ": Signaling role heatmap (outgoing)"))
+make_pair_ht(cc[[nm1]], cc[[nm2]], left_title = nm1, right_title = nm2,
+             pattern = "outgoing", width = 10, height = 12, gap_cm = 1.5)
+signaling_role_note("Outgoing")
+fig_label(paste0(params$pair, ": Signaling role heatmap (incoming)"))
+make_pair_ht(cc[[nm1]], cc[[nm2]], left_title = nm1, right_title = nm2,
+             pattern = "incoming", width = 10, height = 12, gap_cm = 1.5)
+signaling_role_note("Incoming")
+```
+
+## Comparison plots
+
+```{r comparison_plots, fig.width=12, fig.height=10, results='asis'}
+outdir <- file.path(plots_outdir, "comparisons")
+dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
+
+fig_label(paste0(params$pair, ": Number of interactions"))
+gg1 <- compareInteractions(merged_cc, show.legend = FALSE, group = c(1,2)) +
+  ggtitle(paste0(params$pair, " (", sfx, "): Number of interactions"))
+print(gg1)
+ggsave(file.path(outdir, paste0(params$pair, ".", sfx, ".compareInteractions_count.pdf")),
+       plot = gg1, width = 7, height = 5)
+compare_note(measure = "count", is_grouped = FALSE)
+fig_label(paste0(params$pair, ": Number of interactions per sample"))
+.persample_barplot(measure = "count", is_grouped = FALSE)
+
+fig_label(paste0(params$pair, ": Interaction strength"))
+gg2 <- compareInteractions(merged_cc, show.legend = FALSE, group = c(1,2), measure = "weight") +
+  ggtitle(paste0(params$pair, " (", sfx, "): Interaction strength"))
+print(gg2)
+ggsave(file.path(outdir, paste0(params$pair, ".", sfx, ".compareInteractions_weight.pdf")),
+       plot = gg2, width = 7, height = 5)
+compare_note(measure = "weight", is_grouped = FALSE)
+fig_label(paste0(params$pair, ": Interaction strength per sample"))
+.persample_barplot(measure = "weight", is_grouped = FALSE)
+
+fig_label(paste0(params$pair, ": Differential number of interactions"))
+pdf(file.path(outdir, paste0(params$pair, ".", sfx, ".diffInteraction_count.pdf")),
+    width = 12, height = 10)
+op <- par(mar = c(2, 2, 6, 2), xpd = NA)
+netVisual_diffInteraction(merged_cc, weight.scale = TRUE)
+par(op); invisible(dev.off())
+op <- par(mar = c(2, 2, 6, 2), xpd = NA)
+netVisual_diffInteraction(merged_cc, weight.scale = TRUE)
+title(paste0(params$pair, " (", sfx, "): Differential number of interactions"),
+      cex.main = 1.4, line = 2)
+par(op)
+diff_chord_note(measure = "count", is_grouped = FALSE)
+
+fig_label(paste0(params$pair, ": Differential interaction strengths"))
+pdf(file.path(outdir, paste0(params$pair, ".", sfx, ".diffInteraction_weight.pdf")),
+    width = 12, height = 10)
+op <- par(mar = c(2, 2, 6, 2), xpd = NA)
+netVisual_diffInteraction(merged_cc, weight.scale = TRUE, measure = "weight")
+par(op); invisible(dev.off())
+op <- par(mar = c(2, 2, 6, 2), xpd = NA)
+netVisual_diffInteraction(merged_cc, weight.scale = TRUE, measure = "weight")
+title(paste0(params$pair, " (", sfx, "): Differential interaction strengths"),
+      cex.main = 1.4, line = 2)
+par(op)
+diff_chord_note(measure = "weight", is_grouped = FALSE)
+
+fig_label(paste0(params$pair, ": Differential interaction counts heatmap"))
+plt   <- netVisual_heatmap(merged_cc)
+ttl   <- paste0(params$pair, " (", sfx, "): Differential interaction counts")
+draw_grid_plot(plt, ttl)
+pdf(file.path(outdir, paste0(params$pair, ".", sfx, ".diff_heatmap_count.pdf")),
+    width = 7, height = 7)
+draw_grid_plot(plt, ttl); invisible(dev.off())
+diff_heatmap_note(measure = "count", is_grouped = FALSE)
+
+fig_label(paste0(params$pair, ": Differential interaction weights heatmap"))
+plt   <- netVisual_heatmap(merged_cc, measure = "weight")
+ttl   <- paste0(params$pair, " (", sfx, "): Differential interaction weights")
+draw_grid_plot(plt, ttl)
+pdf(file.path(outdir, paste0(params$pair, ".", sfx, ".diff_heatmap_weight.pdf")),
+    width = 7, height = 7)
+draw_grid_plot(plt, ttl); invisible(dev.off())
+diff_heatmap_note(measure = "weight", is_grouped = FALSE)
+```
+
+# Grouped cell types
+
+## Grouped overview heatmaps
+
+```{r grouped_overview_render, include=FALSE}
+grouped_overview_items <- list()
+for (nm in c(nm1, nm2)) {
   outdir <- file.path(plots_outdir, "overview_grouped", nm)
   dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
-  
-  # Heatmap of grouped interaction counts
-  plt <- netVisual_heatmap(cc)
-  title <- paste0(nm, ": Interaction counts")
-  draw_grid_plot(plt, title)
-  pdf(file.path(outdir, paste0(nm, "_grouped_heatmap_count.pdf")),
-      width = 7, height = 7)
-  draw_grid_plot(plt, title)
-  dev.off()
-
-  # Heatmap of grouped interaction strengths
-  plt <- netVisual_heatmap(cc, measure = "weight")
-  title <- paste0(nm, ": Interaction weight")
-  draw_grid_plot(plt, title)
-  pdf(file.path(outdir, paste0(nm, "_grouped_heatmap_weight.pdf")),
-      width = 7, height = 7)
-  draw_grid_plot(plt, title)
-  dev.off()
+  for (measure in c("count", "weight")) {
+    lbl_m    <- if (measure == "count") "Interaction counts" else "Interaction weight"
+    fstem    <- paste0(nm, ".", sfx, ".grouped_heatmap_", measure)
+    png_path <- file.path(outdir, paste0(fstem, ".png"))
+    pdf_path <- file.path(outdir, paste0(fstem, ".pdf"))
+    ttl      <- paste0(nm, " (", sfx, "): ", lbl_m, " (grouped)")
+    plt      <- if (measure == "count") netVisual_heatmap(grouped[[nm]]) else
+                                        netVisual_heatmap(grouped[[nm]], measure = "weight")
+    png(png_path, width = 700, height = 700)
+    draw_grid_plot(plt, ttl); invisible(dev.off())
+    pdf(pdf_path, width = 7, height = 7)
+    draw_grid_plot(plt, ttl); invisible(dev.off())
+    grouped_overview_items[[length(grouped_overview_items) + 1]] <-
+      list(nm = nm, measure = measure, lbl = lbl_m, png = png_path)
+  }
 }
 ```
 
-## Merged grouped CellChat objects for binary comparisons
-
-```{r merge_cell_groups}
-cc_NC_A_vs_6m_g <- merge_two_cellchat(cc_A_NC_g, cc_6m_NC_g,c("A_NC", "6m_NC"))
-cc_C_A_vs_6m_g  <- merge_two_cellchat(cc_A_C_g,  cc_6m_C_g, c("A_C",  "6m_C"))
-cc_A_NC_vs_C_g  <- merge_two_cellchat(cc_A_NC_g, cc_A_C_g,  c("A_NC", "A_C"))
-cc_6m_NC_vs_C_g <- merge_two_cellchat(cc_6m_NC_g,cc_6m_C_g, c("6m_NC","6m_C"))
-
-comp_grouped_list <- list(
-  NC_A_vs_6m = cc_NC_A_vs_6m_g,
-  C_A_vs_6m  = cc_C_A_vs_6m_g,
-  A_NC_vs_C  = cc_A_NC_vs_C_g,
-  `6m_NC_vs_C` = cc_6m_NC_vs_C_g
-)
-```
-
-```{r merged, fig.width=12, fig.height=10}
-for (cc_name in names(comp_grouped_list)) {
-  cc <- comp_grouped_list[[cc_name]]
-  outdir <- file.path(plots_outdir, "comparisons_grouped", cc_name)
-  dir.create(outdir, showWarnings = F, recursive = T)
-  # # Comparing the total number of interactions
-  gg1 <- compareInteractions(cc, show.legend = F, group = c(1,2)) +
-     ggtitle(paste0(cc_name, ": Number of interactions"))
-  print(gg1)
-  ggsave(filename = file.path(outdir,
-         paste0(cc_name, "_grouped_compareInteractions_count.pdf")),
-         plot = gg1, width = 7, height = 5)
-  # Comparing the total interaction strength
-  gg2 <- compareInteractions(cc, show.legend = F, group = c(1,2),
-                             measure="weight") +
-  ggtitle(paste0(cc_name, ": Interaction strength"))
-  print(gg2)
-  ggsave(filename = file.path(outdir,
-         paste0(cc_name, "_grouped_compareInteractions_weight.pdf")),
-    plot = gg2, width = 7, height = 5)
-  # Examine the differential number of interactions
-  op <- par(mar = c(2, 2, 6, 2), xpd = NA)
-  netVisual_diffInteraction(cc, weight.scale = T)
-  title(paste0(cc_name, ": Differential number of interactions"), cex.main = 1.4, line = 2)
-  grDevices::pdf(file.path(outdir,
-    paste0(cc_name, "_grouped_diffInteraction_count.pdf")),
-    width = 12, height = 10)
-  dev.off()
-  # Examine the differential interaction strengths
-  op <- par(mar = c(2, 2, 6, 2), xpd = NA)
-  netVisual_diffInteraction(cc, weight.scale = T, measure = "weight")
-  title(paste0(cc_name, ": Differential interaction strengths"), cex.main = 1.4, line = 2)
-  grDevices::pdf(file.path(outdir,
-    paste0(cc_name, "_grouped_diffInteraction_weight.pdf")),
-    width = 12, height = 10)
-  dev.off()
-  # heatmap of differential number of interactions
-  plt <- netVisual_heatmap(cc)
-  title <- paste0(cc_name, ": Differential interaction counts")
-  draw_grid_plot(plt, title)
-  pdf(file.path(outdir, paste0(cc_name, "_grouped_diff_heatmap_count.pdf")),
-      width = 7, height = 7)
-  draw_grid_plot(plt, title)
-  dev.off()
-
-  # heatmap of differential interaction strengths
-  plt <- netVisual_heatmap(cc, measure = "weight")
-  title <- paste0(cc_name, ": Differential interaction weights")
-  draw_grid_plot(plt, title)
-  pdf(file.path(outdir, paste0(cc_name, "_grouped_diff_heatmap_weight.pdf")),
-      width = 7, height = 7)
-  draw_grid_plot(plt, title)
-  dev.off()
+```{r grouped_overview_display, results='asis'}
+for (item in grouped_overview_items) {
+  .fig_counter <<- .fig_counter + 1L
+  lbl <- paste0(params$pair, ".", sfx, ".Fig", .fig_counter,
+                " \u2014 ", item$nm, " grouped: ", item$lbl)
+  cat(paste0("\n\n### ", lbl, "\n\n",
+             "![](", item$png, ")\n\n"))
+  grouped_note(item$nm)
 }
 ```
 
-## Session info
+## Grouped comparison
 
-```{r, echo=F}
+```{r grouped_comparison_plots, fig.width=12, fig.height=10, results='asis'}
+outdir <- file.path(plots_outdir, "comparisons_grouped")
+dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
+
+fig_label(paste0(params$pair, " grouped: Number of interactions"))
+gg1 <- compareInteractions(grouped_merged, show.legend = FALSE, group = c(1,2)) +
+  ggtitle(paste0(params$pair, " (", sfx, "): Number of interactions (grouped)"))
+print(gg1)
+ggsave(file.path(outdir, paste0(params$pair, ".", sfx, ".grouped_compareInteractions_count.pdf")),
+       plot = gg1, width = 7, height = 5)
+compare_note(measure = "count", is_grouped = TRUE)
+fig_label(paste0(params$pair, " grouped: Number of interactions per sample"))
+.persample_barplot(measure = "count", is_grouped = TRUE)
+
+fig_label(paste0(params$pair, " grouped: Interaction strength"))
+gg2 <- compareInteractions(grouped_merged, show.legend = FALSE, group = c(1,2), measure = "weight") +
+  ggtitle(paste0(params$pair, " (", sfx, "): Interaction strength (grouped)"))
+print(gg2)
+ggsave(file.path(outdir, paste0(params$pair, ".", sfx, ".grouped_compareInteractions_weight.pdf")),
+       plot = gg2, width = 7, height = 5)
+compare_note(measure = "weight", is_grouped = TRUE)
+fig_label(paste0(params$pair, " grouped: Interaction strength per sample"))
+.persample_barplot(measure = "weight", is_grouped = TRUE)
+
+fig_label(paste0(params$pair, " grouped: Differential number of interactions"))
+pdf(file.path(outdir, paste0(params$pair, ".", sfx, ".grouped_diffInteraction_count.pdf")),
+    width = 12, height = 10)
+op <- par(mar = c(2, 2, 6, 2), xpd = NA)
+netVisual_diffInteraction(grouped_merged, weight.scale = TRUE)
+par(op); invisible(dev.off())
+op <- par(mar = c(2, 2, 6, 2), xpd = NA)
+netVisual_diffInteraction(grouped_merged, weight.scale = TRUE)
+title(paste0(params$pair, " (", sfx, "): Differential interactions (grouped)"),
+      cex.main = 1.4, line = 2)
+par(op)
+diff_chord_note(measure = "count", is_grouped = TRUE)
+
+fig_label(paste0(params$pair, " grouped: Differential interaction strengths"))
+pdf(file.path(outdir, paste0(params$pair, ".", sfx, ".grouped_diffInteraction_weight.pdf")),
+    width = 12, height = 10)
+op <- par(mar = c(2, 2, 6, 2), xpd = NA)
+netVisual_diffInteraction(grouped_merged, weight.scale = TRUE, measure = "weight")
+par(op); invisible(dev.off())
+op <- par(mar = c(2, 2, 6, 2), xpd = NA)
+netVisual_diffInteraction(grouped_merged, weight.scale = TRUE, measure = "weight")
+title(paste0(params$pair, " (", sfx, "): Differential strengths (grouped)"),
+      cex.main = 1.4, line = 2)
+par(op)
+diff_chord_note(measure = "weight", is_grouped = TRUE)
+
+fig_label(paste0(params$pair, " grouped: Diff interaction counts heatmap"))
+plt <- netVisual_heatmap(grouped_merged)
+ttl <- paste0(params$pair, " (", sfx, "): Differential interaction counts (grouped)")
+draw_grid_plot(plt, ttl)
+pdf(file.path(outdir, paste0(params$pair, ".", sfx, ".grouped_diff_heatmap_count.pdf")),
+    width = 7, height = 7)
+draw_grid_plot(plt, ttl); invisible(dev.off())
+diff_heatmap_note(measure = "count", is_grouped = TRUE)
+
+fig_label(paste0(params$pair, " grouped: Diff interaction weights heatmap"))
+plt <- netVisual_heatmap(grouped_merged, measure = "weight")
+ttl <- paste0(params$pair, " (", sfx, "): Differential interaction weights (grouped)")
+draw_grid_plot(plt, ttl)
+pdf(file.path(outdir, paste0(params$pair, ".", sfx, ".grouped_diff_heatmap_weight.pdf")),
+    width = 7, height = 7)
+draw_grid_plot(plt, ttl); invisible(dev.off())
+diff_heatmap_note(measure = "weight", is_grouped = TRUE)
+```
+
+# Session info
+
+```{r session_info, echo=FALSE}
 sessionInfo()
 ```
