@@ -9,8 +9,10 @@ data/
 *.sw*
 *.knit.md
 rundir/
+old/
 ._.DS_Store
 .DS_Store
+.vscode
 
 # Generated analysis outputs
 analysis-1/results/
@@ -21,5 +23,6 @@ cellranger/results/
 
 # Submission bundles and supporting lab files
 geo-submission/
-documents/chikv/labbook_ScRNAsq_CHIK_batches_123.xlsx
-documents/chikv/sequencings/
+documents/chikv/
+*.time
+.nfs*
