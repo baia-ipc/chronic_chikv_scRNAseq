@@ -329,9 +329,16 @@ ora_treeplot <- function(ora_results, filename = NULL, show = T) {
 }
 
 kegg_draw_pathways <- function(kegg_results, l2fc, dirname, verbose = T) {
+    if (is.null(l2fc) || length(l2fc) == 0) {
+        if (verbose) {
+            print("Skipping KEGG pathway drawing: no gene fold-change data")
+        }
+        return(invisible(NULL))
+    }
     sign_kegg <- kegg_results[kegg_results$p.adjust <= 0.05, ]
     pathway_ids <- rownames(sign_kegg)
     current_dir <- getwd()
+    on.exit(setwd(current_dir), add = TRUE)
     for (id in pathway_ids) {
         row <- sign_kegg[sign_kegg$ID == id, ]
         desc <- sanitize_name(row$Description)
@@ -339,12 +346,11 @@ kegg_draw_pathways <- function(kegg_results, l2fc, dirname, verbose = T) {
             print(paste("Drawing pathway:", id))
         }
         setwd(dirname)
-        pathview(gene.data = l2fc, pathway.id = id,
-                 species = "hsa", kegg.native = FALSE, gene.idtype = "SYMBOL",
-                 multi.state = F, out.suffix = paste0("KEGG.", desc),
-                 kegg.dir = file.path(dirname))
+        try(pathview(gene.data = l2fc, pathway.id = id,
+                     species = "hsa", kegg.native = FALSE, gene.idtype = "SYMBOL",
+                     multi.state = F, out.suffix = paste0("KEGG.", desc),
+                     kegg.dir = file.path(dirname)),
+            silent = TRUE)
     }
     unlink(file.path(dirname, "*.xml"), recursive = TRUE)
-    setwd(current_dir)
 }
-

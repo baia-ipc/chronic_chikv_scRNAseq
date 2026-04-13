@@ -42,12 +42,13 @@ map_symbols_to_entrez_IDs <- function(symbols, verbose=T) {
       # possible alternative is bitr() of clusterProfiler, see below
       results <- try(mapIds(org.Hs.eg.db, keys = symbols,
                         column = "ENTREZID", keytype = "SYMBOL",
-                        multiVals = "first"))
-      if (class(results) == "try-error") {
+                        multiVals = "first"),
+                     silent = TRUE)
+      if (inherits(results, "try-error")) {
         results = c()
       }
       if (verbose) {
-        n_missing = sum(is.na(results))
+        n_missing = length(symbols) - sum(!is.na(results))
         p_missing = round((n_missing / length(symbols)) * 100, 1)
         print(paste0("- of these, number of genes non considered, ",
                      "since missing Entrez ID: ", n_missing, " (",

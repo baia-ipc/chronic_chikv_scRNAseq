@@ -370,9 +370,12 @@ select_genes <- function(so, minrowsum = 0, keep_TCR = F,
     }
   }
   if (!keep_IG) {
-    IGgenes <- c(grep(pattern = "^IG[HLK][VDJ]", selgenes, value = TRUE),
-                   c("IGHG1", "IGHD", "IGHE", "IGHA[12]", "IGHG[1234]",
-                     "IGKC", "IGLC[1234567]", "AC233755.1"))
+    IGgenes <- c(
+      grep(pattern = "^IG[HLK][VDJ]", selgenes, value = TRUE),
+      grep(pattern = "^IGHG[0-9P]|^IGHA[0-9]|^IGLC[0-9]|^IGHM$|^IGHD$|^IGHE$|^IGKC$",
+           selgenes, value = TRUE),
+      intersect(selgenes, "AC233755.1")
+    )
     selgenes <- selgenes[!selgenes %in% IGgenes]
     if (verbose) {
       print(paste0("Number of IG genes to filter out: ", length(IGgenes)))
