@@ -116,7 +116,7 @@ get_signif_gene_info_symbols <- function(genes_info) {
 
 get_signif_gene_info_entrez_IDs <- function(genes_info, verbose=T) {
     genes_info <- subset(genes_info, p_val_adj <= 0.05)
-    entrez_IDs <- map_symbols_to_entrez_IDs(rownames(genes_info))
+    entrez_IDs <- map_symbols_to_entrez_IDs(rownames(genes_info), verbose)
     results <- genes_info[!is.na(entrez_IDs),]
     rownames(results) <- entrez_IDs[!is.na(entrez_IDs)]
     return(results)

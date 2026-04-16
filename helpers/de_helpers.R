@@ -2,6 +2,53 @@ library(ggplot2)
 library(gridExtra)
 library(pheatmap)
 
+add_de_direction_evidence <- function(pseudo, markers, ident.1, ident.2,
+                                      pseudocount.use = 1, base = 2) {
+  if (is.null(markers) || nrow(markers) == 0) {
+    return(markers)
+  }
+
+  idents <- Idents(pseudo)
+  cells.1 <- names(idents)[idents == ident.1]
+  cells.2 <- names(idents)[idents == ident.2]
+  if (length(cells.1) == 0 || length(cells.2) == 0) {
+    markers$log2fc_group_1 <- ident.1
+    markers$log2fc_group_2 <- ident.2
+    markers$avg_log2expr_group_1 <- NA_real_
+    markers$avg_log2expr_group_2 <- NA_real_
+    markers$higher_in <- NA_character_
+    return(markers)
+  }
+
+  expression_data <- GetAssayData(pseudo, layer = "data")
+  features <- intersect(rownames(markers), rownames(expression_data))
+
+  markers$log2fc_group_1 <- ident.1
+  markers$log2fc_group_2 <- ident.2
+  markers$avg_log2expr_group_1 <- NA_real_
+  markers$avg_log2expr_group_2 <- NA_real_
+  markers$higher_in <- ifelse(
+    is.na(markers$avg_log2FC),
+    NA_character_,
+    ifelse(markers$avg_log2FC > 0, ident.1,
+           ifelse(markers$avg_log2FC < 0, ident.2, "tie"))
+  )
+
+  if (length(features) == 0) {
+    return(markers)
+  }
+
+  mean_log2_expr <- function(x) {
+    log((Matrix::rowSums(expm1(x)) + pseudocount.use) / ncol(x), base = base)
+  }
+  markers[features, "avg_log2expr_group_1"] <-
+    mean_log2_expr(expression_data[features, cells.1, drop = FALSE])
+  markers[features, "avg_log2expr_group_2"] <-
+    mean_log2_expr(expression_data[features, cells.2, drop = FALSE])
+
+  markers
+}
+
 run_pb_deseq2 <- function(pseudo, selgenes, ident.1, ident.2,
                           freqs = NULL) {
   print(paste0("Computing DESeq2 for ", ident.1, " vs ", ident.2, "..."))
@@ -30,12 +77,36 @@ run_pb_deseq2 <- function(pseudo, selgenes, ident.1, ident.2,
   markers <- FindMarkers(pseudo, features = selgenes, logfc.threshold = 0.1,
                          ident.1 = ident.1, ident.2 = ident.2,
                          test.use = "DESeq2")
+  markers <- add_de_direction_evidence(pseudo, markers, ident.1, ident.2)
   results <- list()
   results$all <- markers
   results$pval_filt <- markers %>% filter(p_val_adj < 0.05)
   print(paste0("  Number of genes with adj p-value < 0.05: ",
                nrow(results$pval_filt)))
   results
+}
+
+format_p_value <- function(x, digits = 3L) {
+  out <- rep(NA_character_, length(x))
+  zero <- !is.na(x) & x == 0
+  plain <- !is.na(x) & x >= 0.01
+  sci <- !is.na(x) & x > 0 & x < 0.01
+
+  out[zero] <- "0"
+  out[plain] <- trimws(formatC(x[plain], format = "fg", digits = digits))
+  out[sci] <- paste0(
+    trimws(formatC(x[sci] / 10^floor(log10(x[sci])), format = "fg", digits = digits)),
+    " x 10<sup>", floor(log10(x[sci])), "</sup>"
+  )
+  out
+}
+
+format_de_display_table <- function(x, p_cols = c("p_val", "p_val_adj")) {
+  p_cols <- intersect(p_cols, colnames(x))
+  x[p_cols] <- lapply(x[p_cols], format_p_value)
+  pct_cols <- intersect(c("pct.1", "pct.2"), colnames(x))
+  x[pct_cols] <- lapply(x[pct_cols], function(v) paste0(trimws(formatC(100 * v, format = "fg", digits = 3)), "%"))
+  x
 }
 
 #
