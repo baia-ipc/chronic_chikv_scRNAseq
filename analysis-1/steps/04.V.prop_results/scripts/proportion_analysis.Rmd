@@ -8,7 +8,7 @@ output:
 params:
   analysis: "1"
   input_step: "04.P.prop_test"
-  input_rds: "integrated_so.rds"
+  input_rds: "so_w_prop.rds"
   step: "04.V.prop_results"
 ---
 
@@ -20,6 +20,9 @@ library(Seurat)
 library(viridis)
 library(ggplot2)
 library(RColorBrewer)
+library(rmdreportdeck)
+reportdeck_setup()
+knitr::opts_chunk$set(cache=F)
 
 analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
 
@@ -47,7 +50,7 @@ source(paste0(helpers_dir, "combined_proportion_plot.R"))
 so <- readRDS(paste0(input_var_dir, params$input_rds))
 ```
 
-```{r subset_so_by_timepoint, echo=TRUE}
+```{r subset_so_by_timepoint, echo=FALSE}
 subset_so <- list()
 subset_so[["A"]] <- subset(so, TimePoint == "A")
 subset_so[["6m"]] <- subset(so, TimePoint == "6m")
@@ -55,13 +58,17 @@ subset_so[["NC"]] <- subset(so, clinical_condition == "Non-Chronic")
 subset_so[["C"]] <- subset(so, clinical_condition == "Chronic")
 ```
 
-# Proportion tests
+# Goal
 
-## Proportion tests for A and 6m timepoints
+Test and visualize cell-type composition differences across conditions and timepoints.
+Reports statistical tests comparing Non-Chronic vs Chronic and acute (A) vs 6-month (6m)
+groups, with plots and tables summarising proportion shifts per cell type.
+
+# Proportion test for A and 6m timepoints
 
 Non-Chronic vs Chronic
 
-```{r tp_proportion_test_results, echo=TRUE, fig.width=14, fig.height=8}
+```{r tp_proportion_test_results, echo=FALSE, fig.width=14, fig.height=8}
 for (cs in c("all", names(so@misc$cell_subsets))) {
   for (tp in c("A", "6m")) {
     sso <- subset_so[[tp]]
@@ -84,7 +91,7 @@ for (cs in c("all", names(so@misc$cell_subsets))) {
 }
 ```
 
-```{r tp_proportion_test_results_table, echo=TRUE, results='asis'}
+```{r tp_proportion_test_results_table, echo=FALSE, results='asis'}
 for (cs in c("all", names(so@misc$cell_subsets))) {
   for (tp in c("A", "6m")) {
     sso <- subset_so[[tp]]
@@ -102,11 +109,11 @@ for (cs in c("all", names(so@misc$cell_subsets))) {
 }
 ```
 
-## Proportion tests for NC and C conditions
+# Proportion test for NC and C conditions
 
 Acute vs 6 months
 
-```{r cc_proportion_test_results, echo=TRUE, fig.width=14, fig.height=8}
+```{r cc_proportion_test_results, echo=FALSE, fig.width=14, fig.height=8}
 for (cs in c("all", names(so@misc$cell_subsets))) {
   for (cc in c("NC", "C")) {
     sso <- subset_so[[cc]]
@@ -129,7 +136,7 @@ for (cs in c("all", names(so@misc$cell_subsets))) {
 }
 ```
 
-```{r cc_proportion_test_table, echo=TRUE, results='asis'}
+```{r cc_proportion_test_table, echo=FALSE, results='asis'}
 for (cs in c("all", names(so@misc$cell_subsets))) {
   for (cc in c("NC", "C")) {
     sso <- subset_so[[cc]]
@@ -147,7 +154,7 @@ for (cs in c("all", names(so@misc$cell_subsets))) {
 }
 ```
 
-## Session info
+# Session info
 
 ```{r, echo=F}
 sessionInfo()

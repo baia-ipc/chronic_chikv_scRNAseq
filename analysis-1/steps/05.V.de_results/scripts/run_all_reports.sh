@@ -1,33 +1,37 @@
 #!/usr/bin/env bash
-# Run deseq_tables_and_vulcanos.Rmd for all 4 pairs in parallel = 4 HTML reports.
-# Output: analysis-1/steps/05.V.de_results/rundir/deseq_tables_and_vulcanos.{pair}.html
+# Run deseq_tables_and_vulcanos.Rmd for all 4 pairs in parallel.
+# Output: analysis-1/steps/05.V.de_results/rundir/deseq_tables_and_vulcanos.{pair}.linked.html
 
 set -euo pipefail
 
-cd "$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
-
-RMD=analysis-1/steps/05.V.de_results/scripts/deseq_tables_and_vulcanos.Rmd
-OUTDIR=$(realpath analysis-1/steps/05.V.de_results/rundir)
-ROOT=$(pwd)
+THISSCRIPTDIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+cd "$(git -C "$THISSCRIPTDIR" rev-parse --show-toplevel)"
+KNIT2HTML=$(realpath scripts/knit2html)
 
 PAIRS=(A M6 NC C)
+SCRIPTS=analysis-1/steps/05.V.de_results/scripts
+OUTDIR=$(realpath analysis-1/steps/05.V.de_results/rundir)
+mkdir -p "$OUTDIR"
+
+# Create per-pair symlinks so knit2html produces distinctly named outputs
+for pair in "${PAIRS[@]}"; do
+  ln -sf deseq_tables_and_vulcanos.Rmd "${SCRIPTS}/deseq_tables_and_vulcanos.${pair}.Rmd"
+done
+
+# Remove symlinks on exit (success or failure)
+cleanup() {
+  for pair in "${PAIRS[@]}"; do
+    rm -f "${SCRIPTS}/deseq_tables_and_vulcanos.${pair}.Rmd"
+  done
+}
+trap cleanup EXIT
 
 pids=()
-
 for pair in "${PAIRS[@]}"; do
-  OUT_HTML="${OUTDIR}/deseq_tables_and_vulcanos.${pair}.html"
-  LOG_FILE="${OUTDIR}/deseq_tables_and_vulcanos.${pair}.log"
+  LOG="${OUTDIR}/deseq_tables_and_vulcanos.${pair}.log"
   echo "$(date '+%F %T')  START  pair=${pair}"
-  Rscript -e "
-    withr::with_dir('${ROOT}', {
-      rmarkdown::render(
-        '${RMD}',
-        output_format = 'html_document',
-        output_file   = '${OUT_HTML}',
-        params        = list(pair='${pair}')
-      )
-    })
-  " > "${LOG_FILE}" 2>&1 &
+  "$KNIT2HTML" "${SCRIPTS}/deseq_tables_and_vulcanos.${pair}.Rmd" "pair=${pair}" \
+    > "$LOG" 2>&1 &
   pids+=($!)
 done
 
@@ -36,8 +40,7 @@ echo "Waiting for all to complete..."
 
 failed=0
 for i in "${!pids[@]}"; do
-  pid=${pids[$i]}
-  if wait "$pid"; then
+  if wait "${pids[$i]}"; then
     echo "$(date '+%F %T')  OK     pair=${PAIRS[$i]}"
   else
     echo "$(date '+%F %T')  FAIL   pair=${PAIRS[$i]} — see ${OUTDIR}/deseq_tables_and_vulcanos.${PAIRS[$i]}.log"
@@ -50,5 +53,5 @@ if [ "$failed" -gt 0 ]; then
   exit 1
 fi
 
-echo "All 4 reports done."
+echo "All ${#PAIRS[@]} reports done."
 echo "HTML files in: ${OUTDIR}"
