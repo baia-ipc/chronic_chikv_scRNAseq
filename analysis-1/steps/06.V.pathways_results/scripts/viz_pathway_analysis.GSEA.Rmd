@@ -1,0 +1,227 @@
+---
+title: '`r paste("Chikv | Pathway analysis |", params$database, "GSEA")`'
+author: "Giorgio Gonnella"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: sandstone
+params:
+  analysis: "1"
+  input_step: "06.P.compute_pathways"
+  this_step: "06.V.pathways_results"
+  database: "GO"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message=F, warning=F, echo=F)
+withr::with_dir(here::here(), { source("renv/activate.R") })
+
+library(ggplot2)
+library(clusterProfiler)
+library(enrichplot)
+library(rmdreportdeck)
+reportdeck_setup()
+knitr::opts_chunk$set(cache=F)
+
+analysis_root <- here::here(paste0("analysis-", params$analysis, "/"))
+
+input_step_dir <- paste0(analysis_root, "steps/", params$input_step, "/")
+input_var_dir  <- paste0(input_step_dir, "results/vars/")
+if (!dir.exists(input_var_dir)) {
+  stop("Input variable directory does not exist: ", input_var_dir)
+}
+
+this_step_dir <- paste0(analysis_root, "steps/", params$this_step, "/")
+if (!dir.exists(this_step_dir)) {
+  stop("Current step directory does not exist: ", this_step_dir)
+}
+
+results_dir <- paste0(this_step_dir, "results/")
+
+db <- params$database
+input_rds_map <- c(
+  GO       = "so_w_pathways.GO.rds",
+  KEGG     = "so_w_pathways.KEGG.rds",
+  MSigDb   = "so_w_pathways.MSigDB.rds",
+  Reactome = "so_w_pathways.Reactome.rds"
+)
+if (!db %in% names(input_rds_map)) {
+  stop("Unknown database: ", db,
+       ". Valid values: ", paste(names(input_rds_map), collapse = ", "))
+}
+input_rds <- input_rds_map[[db]]
+step_pfx  <- paste0("V06-", tolower(db), "-gsea")
+
+helpers_dir <- here::here("helpers/")
+source(paste0(helpers_dir, "pathway_analysis_viz_helpers.R"))
+source(paste0(helpers_dir, "pathway_analysis_comp_helpers.R"))
+```
+
+# Goal
+
+Visualize `r params$database` pathway analysis GSEA results computed in the pathway analysis step.
+Displays enriched `r params$database` terms per cell type and condition pair as interactive tables,
+with downloadable assets for each result.
+
+```{r load_input_data}
+so <- readRDS(file = paste0(input_var_dir, input_rds))
+celltypes    <- c(unique(as.character(so$celltype)), "Total")
+cond_pairs   <- c("A", "M6", "NC", "C")
+cond_pairs_lbl <- c("A.C_vs_NC", "6M.C_vs_NC", "NC.A_vs_6M", "C.A_vs_6M")
+names(cond_pairs_lbl) <- cond_pairs
+```
+
+```{r strsanitize}
+strsanitize <- function(s) {
+  gsub(" ", "_", gsub("[^[:alnum:]]", "_", s))
+}
+```
+
+```{r gsea_tables}
+for (pair in cond_pairs) {
+  for (ct in celltypes) {
+    cts <- strsanitize(ct)
+    pfx <- paste0(cond_pairs_lbl[pair], ".", cts)
+    dirname <- paste0(results_dir, cond_pairs_lbl[pair], "/", db, "/GSEA/", cts, "/")
+    if (!is.null(so@misc$gsea[[db]][[pair]][[ct]])) {
+      dir.create(dirname, showWarnings = FALSE, recursive = TRUE)
+      fname <- paste0(dirname, pfx, ".GSEA.", db, ".tsv")
+      write.table(so@misc$gsea[[db]][[pair]][[ct]], file = fname,
+                  sep = "\t", row.names = FALSE, quote = FALSE)
+    }
+  }
+}
+```
+
+```{r results, results='asis', echo=F}
+make_section_block_pfx <- function(...) {
+  sanitize_name(paste(..., collapse = "-"))
+}
+
+append_plot_item <- function(items, title, block_pfx, figtab_id, file_stem,
+                             plot_obj, width, height,
+                             tsv_name = NULL, tsv_uri = NULL) {
+  asset_links <- list(
+    report_download_link(
+      "Download PNG",
+      paste0(report_figure_name(block_pfx, file_stem), ".png"),
+      report_plot_png_data_uri(plot_obj, width = width, height = height)
+    ),
+    report_download_link(
+      "Download PDF",
+      paste0(report_figure_name(block_pfx, file_stem), ".pdf"),
+      report_plot_pdf_data_uri(plot_obj, width = width, height = height)
+    )
+  )
+  if (!is.null(tsv_name) && !is.null(tsv_uri)) {
+    asset_links <- c(asset_links, list(
+      report_download_link("Download TSV", tsv_name, tsv_uri)
+    ))
+  }
+  items[[length(items) + 1L]] <- report_item_panel(
+    title = paste0(title, " (Fig/Tab ", figtab_id, ")"),
+    id = block_pfx,
+    asset_bar = do.call(report_asset_bar, c(list("Downloads"), asset_links)),
+    report_item_plot(plot_obj, width = width, height = height)
+  )
+  items
+}
+
+emit_section <- function(cell_items, no_results_cts) {
+  if (length(cell_items) > 0L) {
+    cat(as.character(report_loop_section(
+      cell_items,
+      open_first = FALSE,
+      max_open = 999L,
+      level = 2L
+    )))
+    cat("\n")
+  }
+  if (length(no_results_cts) > 0L) {
+    cat("\n\n## Cell types with no significant results\n\n")
+    cat(paste0("- ", no_results_cts, collapse = "\n"), "\n\n")
+  }
+}
+
+for (pair_idx in seq_along(cond_pairs)) {
+  pair     <- cond_pairs[[pair_idx]]
+  pair_lbl <- cond_pairs_lbl[[pair]]
+  cat(paste0("\n# ", pair_lbl, "\n\n"))
+  cell_items     <- list()
+  no_results_cts <- character(0)
+
+  for (ct_idx in seq_along(celltypes)) {
+    ct  <- celltypes[[ct_idx]]
+    cts <- strsanitize(ct)
+    pfx <- paste0(pair_lbl, ".", cts)
+    ct_block_pfx  <- make_section_block_pfx(step_pfx, pair_idx, ct_idx, cts)
+    ct_figtab_pfx <- make_section_block_pfx(step_pfx, pair_idx, ct_idx)
+    plot_items <- list()
+    plot_idx   <- 0L
+
+    sorted_sym <- get_sorted_gene_symbols(so@misc$de[[pair]]$all[[ct]])
+    sorted_eid <- get_sorted_gene_entrez_IDs(so@misc$de[[pair]]$all[[ct]], verbose = FALSE)
+    sorted_genes <- if (db %in% c("GO", "MSigDb")) sorted_sym else sorted_eid
+
+    gsea_results <- so@misc$gsea[[db]][[pair]][[ct]]
+    if (!is.null(gsea_results) && nrow(gsea_results) > 0) {
+      gsea_tsv_name <- report_table_name(
+        ct_block_pfx, paste0(pfx, ".GSEA.", db, ".tsv"))
+      gsea_tsv_uri <- report_text_data_uri(
+        report_tsv_text(as.data.frame(gsea_results)))
+      dirname <- paste0(results_dir, pair_lbl, "/", db, "/GSEA/", cts, "/plots/")
+      dir.create(dirname, showWarnings = FALSE, recursive = TRUE)
+      gsea_plts <- list(
+        barplot  = list(plt = try(gsea_barplot( gsea_results,               paste0(dirname, pfx, ".GSEA.barplot.pdf"),  show = F)), w = 10, h = 8),
+        dotplot  = list(plt = try(gsea_dotplot( gsea_results,               paste0(dirname, pfx, ".GSEA.dotplot.pdf"),  show = F)), w = 8,  h = 12),
+        cnetplot = list(plt = try(gsea_cnetplot(gsea_results, sorted_genes, paste0(dirname, pfx, ".GSEA.cnetplot.pdf"), show = F)), w = 8,  h = 8),
+        heatmap  = list(plt = try(gsea_heatmap( gsea_results, sorted_genes, paste0(dirname, pfx, ".GSEA.heatmap.pdf"),  show = F)), w = 10, h = 8),
+        emapplot = list(plt = try(gsea_emapplot(gsea_results,               paste0(dirname, pfx, ".GSEA.emapplot.pdf"), show = F)), w = 10, h = 8),
+        ridgeplot= list(plt = try(gsea_ridgeplot(gsea_results,              paste0(dirname, pfx, ".GSEA.ridgeplot.pdf"),show = F)), w = 10, h = 8)
+      )
+      for (nm in names(gsea_plts)) {
+        ps <- gsea_plts[[nm]]
+        if (!inherits(ps$plt, "try-error") && !is.null(ps$plt)) {
+          plot_idx <- plot_idx + 1L
+          plot_block_pfx <- make_section_block_pfx(ct_block_pfx, db, "GSEA", nm)
+          plot_figtab_id <- make_section_block_pfx(ct_figtab_pfx, plot_idx)
+          plot_items <- append_plot_item(
+            plot_items,
+            title      = paste(db, "GSEA", nm),
+            block_pfx  = plot_block_pfx,
+            figtab_id  = plot_figtab_id,
+            file_stem  = paste0(pfx, ".GSEA.", db, ".", nm),
+            plot_obj   = ps$plt,
+            width      = ps$w,
+            height     = ps$h,
+            tsv_name   = gsea_tsv_name,
+            tsv_uri    = gsea_tsv_uri
+          )
+        }
+      }
+    }
+
+    if (length(plot_items) > 0L) {
+      cell_items[[length(cell_items) + 1L]] <- report_item_panel(
+        title = ct,
+        id    = ct_block_pfx,
+        report_loop_section(
+          plot_items,
+          open_first = FALSE,
+          max_open   = 999L,
+          level      = 3L
+        )
+      )
+    } else {
+      no_results_cts <- c(no_results_cts, ct)
+    }
+  }
+  emit_section(cell_items, no_results_cts)
+}
+```
+
+# Session info
+
+```{r}
+sessionInfo()
+```
