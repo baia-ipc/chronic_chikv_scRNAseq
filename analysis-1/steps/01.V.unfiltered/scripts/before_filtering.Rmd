@@ -26,6 +26,9 @@ library(ggbeeswarm)
 library(parallel)
 library(robustbase)
 library(viridis)
+library(rmdreportdeck)
+reportdeck_setup()
+knitr::opts_chunk$set(cache=F)
 
 if (is.na(params$sample)) {
   stop("Please provide a sample name")
@@ -50,6 +53,12 @@ dir.create(plots_dir, showWarnings = F, recursive = T)
 helpers_dir <- here::here("helpers/")
 source(paste0(helpers_dir, "qc_helpers.R"))
 ```
+
+# Goal
+
+Visualize quality control metrics and expression distributions for a single sample before filtering.
+Includes summary statistics, highest expressed genes, and cell-level QC plots to guide the
+selection of filtering thresholds.
 
 # Load Seurat object
 

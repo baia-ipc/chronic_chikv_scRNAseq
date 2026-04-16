@@ -22,6 +22,9 @@ library(dplyr)
 library(ggbeeswarm)
 library(ggExtra)
 library(matrixStats)
+library(rmdreportdeck)
+reportdeck_setup()
+knitr::opts_chunk$set(cache=F)
 
 analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
 samples_sheet <- here::here(params$samples_sheet)
@@ -42,6 +45,12 @@ helpers_dir <- here::here("helpers/")
 source(paste0(helpers_dir, "samples_sheet.R"))
 source(paste0(helpers_dir, "qc_helpers.R"))
 ```
+
+# Goal
+
+Visualize quality control metrics across all samples merged into a single object, before filtering.
+Provides cross-sample QC plots to compare distributions and identify sample-level outliers,
+supporting the choice of consistent filtering thresholds across samples.
 
 # Load Seurat objects
 

@@ -12,13 +12,16 @@ params:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(message=F, warning=F, echo=F)
+knitr::opts_chunk$set(message=F, warning=F, echo=F, cache=F)
 withr::with_dir(here::here(), { source("renv/activate.R") })
 
 library(Seurat)
 library(viridis)
 library(ggplot2)
 library(RColorBrewer)
+library(rmdreportdeck)
+reportdeck_setup()
+knitr::opts_chunk$set(cache=F)
 
 analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
 
@@ -44,28 +47,63 @@ source(paste0(helpers_dir, "combined_proportion_plot.R"))
 
 ```{r load, echo = FALSE}
 so <- readRDS(paste0(input_var_dir, "integrated_so.rds"))
+
+umap_df <- as.data.frame(Embeddings(so, reduction = "umapharm"))
+colnames(umap_df)[1:2] <- c("UMAP_1", "UMAP_2")
+umap_df <- cbind(
+  data.frame(cell_id = rownames(umap_df), check.names = FALSE),
+  umap_df[, 1:2, drop = FALSE],
+  so@meta.data[, c("sample", "Phase", so@misc$sel_res_col,
+                   "pruned.labels_singleR_fine"), drop = FALSE]
+)
+colnames(umap_df)[colnames(umap_df) == so@misc$sel_res_col] <- "cluster"
 ```
 
-## UMAP
+# Goal
 
-### Single cell types
+Visualize the Harmony-integrated UMAP embedding with one SingleR fine cell type highlighted per panel.
+Each panel displays all cells in grey with the cells of a given type overlaid in dark blue,
+allowing visual confirmation of each cell type's spatial distribution on the UMAP.
+
+# UMAP plots
 
 UMAP highlighting single cell types (singleR fine labels)
 
-```{r single_cell_types_umap, fig.width = 12, fig.height = 6, echo = FALSE}
-for (ct in unique(so$pruned.labels_singleR_fine)) {
+```{r single_cell_types_umap, fig.width = 12, fig.height = 6, echo = FALSE, results = "asis"}
+cell_types <- sort(unique(so$pruned.labels_singleR_fine))
+items <- vector("list", length(cell_types))
+
+for (i in seq_along(cell_types)) {
+  ct <- cell_types[[i]]
   highl <- WhichCells(so, expression = (pruned.labels_singleR_fine == ct))
-  print(length(highl))
-  print(ct)
   plt <- DimPlot(so, reduction = "umapharm",
         cells.highlight = highl, cols.highlight = "darkblue",
         cols = "grey") +
     ggtitle(ct) + theme(legend.position = "none")
-  print(plt)
+  plot_data <- umap_df
+  plot_data$highlighted <- plot_data$pruned.labels_singleR_fine == ct
+  ct_slug <- tolower(gsub("(^-+|-+$)", "", gsub("[^A-Za-z0-9]+", "-", ct)))
+  bundle <- report_plot_bundle(
+    plt,
+    block_prefix = paste0("V03S.", sprintf("%02d", i)),
+    suffix = ct_slug,
+    width = 12,
+    height = 6,
+    data = plot_data,
+    plot_dir = plots_outdir,
+    data_dir = tables_outdir
+  )
+  items[[i]] <- report_item_panel(
+    title = paste0(ct, " (", length(highl), " cells) (Fig/Tab V03S.", sprintf("%02d", i), ")"),
+    asset_bar = report_bundle_asset_bar(bundle$stem, bundle, tsv_label = "Download TSV"),
+    report_item_plot(plt, width = 12, height = 6)
+  )
 }
+
+cat(as.character(report_loop_section(items)))
 ```
 
-## Session info
+# Session info
 
 ```{r, echo=F}
 sessionInfo()

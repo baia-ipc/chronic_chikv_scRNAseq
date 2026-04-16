@@ -12,13 +12,16 @@ params:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(message=F, warning=F, echo=F)
+knitr::opts_chunk$set(message=F, warning=F, echo=F, cache=F)
 withr::with_dir(here::here(), { source("renv/activate.R") })
 
 library(Seurat)
 library(viridis)
 library(ggplot2)
 library(RColorBrewer)
+library(rmdreportdeck)
+reportdeck_setup()
+knitr::opts_chunk$set(cache=F)
 
 analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
 
@@ -44,54 +47,119 @@ source(paste0(helpers_dir, "combined_proportion_plot.R"))
 
 ```{r load, echo = FALSE}
 so <- readRDS(paste0(input_var_dir, "integrated_so.rds"))
+
+umap_df <- as.data.frame(Embeddings(so, reduction = "umapharm"))
+colnames(umap_df)[1:2] <- c("UMAP_1", "UMAP_2")
+umap_df <- cbind(
+  data.frame(cell_id = rownames(umap_df), check.names = FALSE),
+  umap_df[, 1:2, drop = FALSE],
+  so@meta.data[, c("sample", "Phase", so@misc$sel_res_col,
+                   "pruned.labels_singleR_fine"), drop = FALSE]
+)
+colnames(umap_df)[colnames(umap_df) == so@misc$sel_res_col] <- "cluster"
 ```
 
-## UMAP
+# Goal
 
-### Overall UMAP plot
+Summarize the integrated Harmony object after dimensional reduction and annotation.
+Display UMAP by sample, phase, cluster, and cell type;
+quantify sample, cluster, phase, and cell-type proportions.
 
-```{r umap, fig.align = "center", echo = FALSE, fig.width = 12, fig.height = 6}
-DimPlot(object = so, reduction = "umapharm",
-        group.by = "sample",
-        cols = so@misc$sample_cols) +
+# UMAP
+
+## Overall UMAP plot (Fig V03.01)
+
+```{r umap, fig.align = "center", echo = FALSE, fig.width = 12, fig.height = 6, results = "asis"}
+plot_obj <- DimPlot(object = so, reduction = "umapharm",
+                    group.by = "sample",
+                    cols = so@misc$sample_cols) +
   ggtitle("UMAP plot, colored by sample")
+bundle <- report_plot_bundle(
+  plot_obj,
+  block_prefix = "V03.01",
+  suffix = "umap_by_sample",
+  width = 12,
+  height = 6,
+  data = umap_df,
+  plot_dir = plots_outdir,
+  data_dir = tables_outdir
+)
+cat(as.character(report_bundle_asset_bar(bundle$stem, bundle, tsv_label = "Download TSV")), "\n")
+print(plot_obj)
 ```
 
-### UMAP plots by sample
+## UMAP plots by sample (Fig V03.02)
 
-```{r umap_by_sample, fig.align = "center", echo = FALSE, fig.width = 12, fig.height = 12}
-DimPlot(object = so, reduction = "umapharm",
-        group.by = "sample", cols = so@misc$sample_cols,
-        split.by = "sample", ncol = 3) +
+```{r umap_by_sample, fig.align = "center", echo = FALSE, fig.width = 12, fig.height = 12, results = "asis"}
+plot_obj <- DimPlot(object = so, reduction = "umapharm",
+                    group.by = "sample", cols = so@misc$sample_cols,
+                    split.by = "sample", ncol = 3) +
   NoLegend() +
   ggtitle("UMAP plot, splitted by sample")
+bundle <- report_plot_bundle(
+  plot_obj,
+  block_prefix = "V03.02",
+  suffix = "umap_split_by_sample",
+  width = 12,
+  height = 12,
+  data = umap_df,
+  plot_dir = plots_outdir,
+  data_dir = tables_outdir
+)
+cat(as.character(report_bundle_asset_bar(bundle$stem, bundle, tsv_label = "Download TSV")), "\n")
+print(plot_obj)
 ```
 
-### UMAP plot by phase
+## UMAP plot by phase (Fig V03.03)
 
 Basic metrics projected onto the UMAP space
 
-```{r umap_basic_metrics, fig.align = "center", echo = FALSE}
-DimPlot(object = so, reduction = "umapharm", group.by = "Phase",
-            cols = so@misc$phase_cols) +
+```{r umap_basic_metrics, fig.align = "center", echo = FALSE, results = "asis"}
+plot_obj <- DimPlot(object = so, reduction = "umapharm", group.by = "Phase",
+                    cols = so@misc$phase_cols) +
   ggtitle("UMAP plot, colored by phase")
+bundle <- report_plot_bundle(
+  plot_obj,
+  block_prefix = "V03.03",
+  suffix = "umap_by_phase",
+  width = 7,
+  height = 5,
+  data = umap_df,
+  plot_dir = plots_outdir,
+  data_dir = tables_outdir
+)
+cat(as.character(report_bundle_asset_bar(bundle$stem, bundle, tsv_label = "Download TSV")), "\n")
+print(plot_obj)
 ```
 
-## Clustering
+# Clustering
 
-```{r selected_clustering_resolution, echo = FALSE}
-print(paste0("Selected clustering resolution: ",
-             so@misc$sel_res))
-```
+The selected clustering resolution is `r so@misc$sel_res`.
 
-```{r umap_clustering, fig.align = "center", fig.width = 12, fig.height = 6, echo = FALSE}
-DimPlot(object = so, reduction = "umapharm",
-        group.by = so@misc$sel_res_col, label = TRUE,
-        cols = so@misc$cluster_cols) +
+## UMAP by cluster (Fig V03.04)
+
+```{r umap_clustering, fig.align = "center", fig.width = 12, fig.height = 6, echo = FALSE, results = "asis"}
+plot_obj <- DimPlot(object = so, reduction = "umapharm",
+                    group.by = so@misc$sel_res_col, label = TRUE,
+                    cols = so@misc$cluster_cols) +
   ggtitle("UMAP plot, colored by cluster")
+bundle <- report_plot_bundle(
+  plot_obj,
+  block_prefix = "V03.04",
+  suffix = "umap_by_cluster",
+  width = 12,
+  height = 6,
+  data = umap_df,
+  plot_dir = plots_outdir,
+  data_dir = tables_outdir
+)
+cat(as.character(report_bundle_asset_bar(bundle$stem, bundle, tsv_label = "Download TSV")), "\n")
+print(plot_obj)
 ```
 
-```{r clusters_by_sample, fig.align = "center", fig.width = 12, fig.height = 6, echo = FALSE}
+## Cluster composition by sample (Fig V03.05)
+
+```{r clusters_by_sample, fig.align = "center", fig.width = 12, fig.height = 6, echo = FALSE, results = "asis"}
 sample_vs_cl <- as.data.frame(
   round(prop.table(table(so@meta.data[[so@misc$sel_res_col]],
                          so$sample), margin = 1)*100,
@@ -100,14 +168,28 @@ sample_vs_cl <- as.data.frame(
 colnames(sample_vs_cl)[1:2] <- c("Cluster", "SampleID")
 levels(sample_vs_cl$Cluster) <-
   paste("Cl", levels(sample_vs_cl$Cluster), sep = "_")
-print(ggplot(sample_vs_cl, aes(x = Cluster, y = Freq, fill = SampleID))+
+plot_obj <- ggplot(sample_vs_cl, aes(x = Cluster, y = Freq, fill = SampleID))+
   geom_bar(stat = "identity", alpha = .98)+
   coord_flip()+
   theme_minimal()+
-  scale_fill_manual(values = so@misc$sample_cols))
+  scale_fill_manual(values = so@misc$sample_cols)
+bundle <- report_plot_bundle(
+  plot_obj,
+  block_prefix = "V03.05",
+  suffix = "cluster_composition_by_sample",
+  width = 12,
+  height = 6,
+  data = sample_vs_cl,
+  plot_dir = plots_outdir,
+  data_dir = tables_outdir
+)
+cat(as.character(report_bundle_asset_bar(bundle$stem, bundle, tsv_label = "Download TSV")), "\n")
+print(plot_obj)
 ```
 
-```{r samples_by_cluster, fig.align = "center", fig.width = 12, fig.height = 6, echo = FALSE}
+## Sample composition by cluster (Fig V03.06)
+
+```{r samples_by_cluster, fig.align = "center", fig.width = 12, fig.height = 6, echo = FALSE, results = "asis"}
 cols <- so@misc$cluster_cols
 names(cols) <- paste0("Cl_", names(so@misc$cluster_cols))
 cl_vs_sample <- as.data.frame(
@@ -118,199 +200,470 @@ cl_vs_sample <- as.data.frame(
 colnames(cl_vs_sample)[1:2] <- c("SampleID", "Cluster")
 levels(cl_vs_sample$Cluster) <-
   paste("Cl", levels(cl_vs_sample$Cluster), sep = "_")
-print(ggplot(cl_vs_sample, aes(x = SampleID, y = Freq, fill = Cluster))+
+plot_obj <- ggplot(cl_vs_sample, aes(x = SampleID, y = Freq, fill = Cluster))+
   geom_bar(stat = "identity", alpha = .98)+
   coord_flip()+
   theme_minimal()+
-  scale_fill_manual(values = cols))
+  scale_fill_manual(values = cols)
+bundle <- report_plot_bundle(
+  plot_obj,
+  block_prefix = "V03.06",
+  suffix = "sample_composition_by_cluster",
+  width = 12,
+  height = 6,
+  data = cl_vs_sample,
+  plot_dir = plots_outdir,
+  data_dir = tables_outdir
+)
+cat(as.character(report_bundle_asset_bar(bundle$stem, bundle, tsv_label = "Download TSV")), "\n")
+print(plot_obj)
 ```
 
-## Cell types
+# Cell types
 
-SingleR fine cell type annotations
+## UMAP by cell type (Fig V03.07)
 
-```{r umap_singleR_fine, fig.width = 12, fig.height = 6, echo = FALSE}
-DimPlot(object = so, reduction = "umapharm",
-        group.by = "pruned.labels_singleR_fine",
-        cols = so@misc$colors$celltypes, label = F, repel = TRUE) +
+```{r umap_singleR_fine, fig.width = 12, fig.height = 6, echo = FALSE, results = "asis"}
+plot_obj <- DimPlot(object = so, reduction = "umapharm",
+                    group.by = "pruned.labels_singleR_fine",
+                    cols = so@misc$colors$celltypes, label = F, repel = TRUE) +
   ggtitle("UMAP plot, colored by cell type")
+bundle <- report_plot_bundle(
+  plot_obj,
+  block_prefix = "V03.07",
+  suffix = "umap_by_singleR_fine_celltype",
+  width = 12,
+  height = 6,
+  data = umap_df,
+  plot_dir = plots_outdir,
+  data_dir = tables_outdir
+)
+cat(as.character(report_bundle_asset_bar(bundle$stem, bundle, tsv_label = "Download TSV")), "\n")
+print(plot_obj)
 ```
 
-```{r umap_singleR_by_sample_fine, fig.width = 12, fig.height = 12, echo = FALSE}
-DimPlot(object = so, reduction = "umapharm",
-        group.by = "pruned.labels_singleR_fine",
-        cols = so@misc$colors$celltypes, label = F, repel = TRUE,
-        split.by = "sample", ncol = 3) +
+## UMAP by cell type, split by sample (Fig V03.08)
+
+```{r umap_singleR_by_sample_fine, fig.width = 12, fig.height = 12, echo = FALSE, results = "asis"}
+plot_obj <- DimPlot(object = so, reduction = "umapharm",
+                    group.by = "pruned.labels_singleR_fine",
+                    cols = so@misc$colors$celltypes, label = F, repel = TRUE,
+                    split.by = "sample", ncol = 3) +
   NoLegend() +
   ggtitle("UMAP plot, colored by cell type, splitted by sample")
+bundle <- report_plot_bundle(
+  plot_obj,
+  block_prefix = "V03.08",
+  suffix = "umap_by_singleR_fine_celltype_split_by_sample",
+  width = 12,
+  height = 12,
+  data = umap_df,
+  plot_dir = plots_outdir,
+  data_dir = tables_outdir
+)
+cat(as.character(report_bundle_asset_bar(bundle$stem, bundle, tsv_label = "Download TSV")), "\n")
+print(plot_obj)
 ```
 
-```{r table_fine_celltypes_per_sample, echo = FALSE}
-knitr::kable(as.data.frame.matrix(round(prop.table(table(so$sample,
-  so$pruned.labels_singleR_fine), margin = 2)*100, digits = 2)))
+## Cell type proportions per sample (Tab V03.09)
+
+```{r table_fine_celltypes_per_sample, echo = FALSE, results = "asis"}
+tbl <- as.data.frame.matrix(round(prop.table(table(so$sample,
+  so$pruned.labels_singleR_fine), margin = 2)*100, digits = 2))
+tbl <- data.frame(sample_id = rownames(tbl), tbl, check.names = FALSE)
+cat(as.character(report_asset_bar(
+  report_table_name("V03.09"),
+  report_tsv_download_link(
+    tbl,
+    report_table_name("V03.09", "fine_celltypes_per_sample.tsv"),
+    "Download TSV"
+  )
+)), "\n")
+knitr::kable(tbl)
 ```
 
-```{r plot_fine_celltypes_per_sample, fig.width = 12, fig.height = 6, echo = FALSE}
+## Cell type proportions per sample (Fig V03.10)
+
+```{r plot_fine_celltypes_per_sample, fig.width = 12, fig.height = 6, echo = FALSE, results = "asis"}
 celltype_df_f <- as.data.frame(round(prop.table(table(so$sample,
   so$pruned.labels_singleR_fine), margin = 2)*100, digits = 2))
 colnames(celltype_df_f) <- c("sample_id", "cell_type", "percentage")
-ggplot(celltype_df_f, aes(x = cell_type, y = percentage))+
+plot_obj <- ggplot(celltype_df_f, aes(x = cell_type, y = percentage))+
   geom_bar(stat = "identity", aes(fill = sample_id))+
   scale_fill_manual(values = so@misc$sample_cols)+
   theme_bw()+
   coord_flip()+
   scale_x_discrete(limits = rev(levels(celltype_df_f$cell_type)))
+bundle <- report_plot_bundle(
+  plot_obj,
+  block_prefix = "V03.10",
+  suffix = "fine_celltypes_per_sample",
+  width = 12,
+  height = 6,
+  data = celltype_df_f,
+  plot_dir = plots_outdir,
+  data_dir = tables_outdir
+)
+cat(as.character(report_bundle_asset_bar(bundle$stem, bundle, tsv_label = "Download TSV")), "\n")
+print(plot_obj)
 ```
 
-```{r table_samples_per_fine_celltype, echo = FALSE}
-knitr::kable(as.data.frame.matrix(round(prop.table(
+## Sample proportions per cell type (Tab V03.11)
+
+```{r table_samples_per_fine_celltype, echo = FALSE, results = "asis"}
+tbl <- as.data.frame.matrix(round(prop.table(
     table(so$pruned.labels_singleR_fine,
-          so$sample), margin = 2)*100, digits = 2)))
+          so$sample), margin = 2)*100, digits = 2))
+tbl <- data.frame(cell_type = rownames(tbl), tbl, check.names = FALSE)
+cat(as.character(report_asset_bar(
+  report_table_name("V03.11"),
+  report_tsv_download_link(
+    tbl,
+    report_table_name("V03.11", "samples_per_fine_celltype.tsv"),
+    "Download TSV"
+  )
+)), "\n")
+knitr::kable(tbl)
 ```
 
-```{r plot_samples_per_fine_celltypes, fig.width = 12, echo = FALSE}
+## Sample proportions per cell type (Fig V03.12)
+
+```{r plot_samples_per_fine_celltypes, fig.width = 12, echo = FALSE, results = "asis"}
 celltype_df_fr <- as.data.frame(round(prop.table(
       table(so$pruned.labels_singleR_fine,
             so$sample), margin = 2)*100, digits = 2))
 colnames(celltype_df_fr) <- c("cell_type", "sample_id", "percentage")
-ggplot(celltype_df_fr, aes(x = sample_id, y = percentage))+
+plot_obj <- ggplot(celltype_df_fr, aes(x = sample_id, y = percentage))+
   geom_bar(stat = "identity", aes(fill = cell_type))+
   scale_fill_manual(values = so@misc$colors$celltypes)+
   theme_bw()+
   coord_flip()+
   scale_x_discrete(limits = rev(levels(celltype_df_fr$sample_id)))
+bundle <- report_plot_bundle(
+  plot_obj,
+  block_prefix = "V03.12",
+  suffix = "samples_per_fine_celltype",
+  width = 12,
+  height = 6,
+  data = celltype_df_fr,
+  plot_dir = plots_outdir,
+  data_dir = tables_outdir
+)
+cat(as.character(report_bundle_asset_bar(bundle$stem, bundle, tsv_label = "Download TSV")), "\n")
+print(plot_obj)
 ```
 
-## Cell types by cluster
+# Cell types by cluster
 
-SingleR assignments by cluster.
+## SingleR assignments by cluster (Tab V03.13)
 
 ```{r singleR_vs_clustering_tables, results = "asis", echo = FALSE}
-print(knitr::kable(as.data.frame.matrix(
-      table(so@meta.data[[so@misc$sel_res_col]],
-            so$pruned.labels_singleR_fine))))
-print(knitr::kable(as.data.frame.matrix(addmargins(round(prop.table(
-      table(so@meta.data[[so@misc$sel_res_col]],
-            so$pruned.labels_singleR_fine),
-      margin = 1)*100, digits = 2), margin = 2))))
-print(knitr::kable(as.data.frame.matrix(addmargins(round(prop.table(
-      table(so$pruned.labels_singleR_fine,
-            so@meta.data[[so@misc$sel_res_col]]),
-      margin = 1)*100, digits = 2), margin = 2))))
+singleR_cluster_counts <- as.data.frame.matrix(
+  table(so@meta.data[[so@misc$sel_res_col]],
+        so$pruned.labels_singleR_fine)
+)
+singleR_cluster_counts <- data.frame(
+  cluster = rownames(singleR_cluster_counts),
+  singleR_cluster_counts,
+  check.names = FALSE
+)
+singleR_cluster_row_pct <- as.data.frame.matrix(addmargins(round(prop.table(
+  table(so@meta.data[[so@misc$sel_res_col]],
+        so$pruned.labels_singleR_fine),
+  margin = 1)*100, digits = 2), margin = 2))
+singleR_cluster_row_pct <- data.frame(
+  cluster = rownames(singleR_cluster_row_pct),
+  singleR_cluster_row_pct,
+  check.names = FALSE
+)
+singleR_cluster_col_pct <- as.data.frame.matrix(addmargins(round(prop.table(
+  table(so$pruned.labels_singleR_fine,
+        so@meta.data[[so@misc$sel_res_col]]),
+  margin = 1)*100, digits = 2), margin = 2))
+singleR_cluster_col_pct <- data.frame(
+  cell_type = rownames(singleR_cluster_col_pct),
+  singleR_cluster_col_pct,
+  check.names = FALSE
+)
+cat(as.character(report_asset_bar(
+  report_table_name("V03.13"),
+  report_tsv_download_link(singleR_cluster_counts,
+                           report_table_name("V03.13", "singleR_vs_cluster_counts.tsv"),
+                           "Counts TSV"),
+  report_tsv_download_link(singleR_cluster_row_pct,
+                           report_table_name("V03.13", "singleR_vs_cluster_cluster_pct.tsv"),
+                           "Cluster % TSV"),
+  report_tsv_download_link(singleR_cluster_col_pct,
+                           report_table_name("V03.13", "singleR_vs_cluster_celltype_pct.tsv"),
+                           "Cell type % TSV")
+)), "\n")
+print(knitr::kable(singleR_cluster_counts))
+print(knitr::kable(singleR_cluster_row_pct))
+print(knitr::kable(singleR_cluster_col_pct))
 ```
 
-```{r singleR_vs_clustering_plots1, fig.width = 12, fig.height = 6, echo = FALSE}
+## Cell type composition by cluster (Fig V03.14)
+
+```{r singleR_vs_clustering_plots1, fig.width = 12, fig.height = 6, echo = FALSE, results = "asis"}
 df <- as.data.frame(round(prop.table(table(so@meta.data[[so@misc$sel_res_col]],
         so$pruned.labels_singleR_fine), margin = 2)*100,
         digits = 2))
 colnames(df) <- c("cluster", "cell_type", "percentage")
-ggplot(df, aes(x = cell_type, y = percentage))+
+plot_obj <- ggplot(df, aes(x = cell_type, y = percentage))+
   geom_bar(stat = "identity", aes(fill = cluster))+
   theme_bw()+
   coord_flip()+
   scale_x_discrete(limits = rev(levels(df$cell_type))) +
   scale_fill_manual(values = so@misc$cluster_cols)
+bundle <- report_plot_bundle(
+  plot_obj,
+  block_prefix = "V03.14",
+  suffix = "singleR_celltype_composition_by_cluster",
+  width = 12,
+  height = 6,
+  data = df,
+  plot_dir = plots_outdir,
+  data_dir = tables_outdir
+)
+cat(as.character(report_bundle_asset_bar(bundle$stem, bundle, tsv_label = "Download TSV")), "\n")
+print(plot_obj)
 ```
 
-```{r singleR_vs_clustering_plots2, fig.width=12, fig.height=6, echo=F}
+## Cluster composition by cell type (Fig V03.15)
+
+```{r singleR_vs_clustering_plots2, fig.width=12, fig.height=6, echo=F, results = "asis"}
 df2 <- as.data.frame(round(prop.table(table(
          so$pruned.labels_singleR_fine,
          so@meta.data[[so@misc$sel_res_col]]), margin = 2)*100, digits = 2))
 colnames(df2) <- c("cell_type", "cluster", "percentage")
-ggplot(df2, aes(x = cluster, y = percentage))+
+plot_obj <- ggplot(df2, aes(x = cluster, y = percentage))+
   geom_bar(stat = "identity", aes(fill = cell_type))+
   theme_bw()+
   coord_flip()+
   scale_x_discrete(limits = rev(levels(df2$cluster))) +
   scale_fill_manual(values = so@misc$colors$celltypes)
+bundle <- report_plot_bundle(
+  plot_obj,
+  block_prefix = "V03.15",
+  suffix = "cluster_composition_by_singleR_celltype",
+  width = 12,
+  height = 6,
+  data = df2,
+  plot_dir = plots_outdir,
+  data_dir = tables_outdir
+)
+cat(as.character(report_bundle_asset_bar(bundle$stem, bundle, tsv_label = "Download TSV")), "\n")
+print(plot_obj)
 ```
 
-## Phase by cluster
+# Phase by cluster
+
+## Phase vs. cluster counts and proportions (Tab V03.16)
 
 ```{r phase_vs_clustering_tables, results = "asis", echo = FALSE}
-print(knitr::kable(as.data.frame.matrix(
-      table(so@meta.data[[so@misc$sel_res_col]],
-            so$Phase))))
-print(knitr::kable(as.data.frame.matrix(addmargins(round(prop.table(
-      table(so@meta.data[[so@misc$sel_res_col]],
-            so$Phase),
-      margin = 1)*100, digits = 2), margin = 2))))
-print(knitr::kable(as.data.frame.matrix(addmargins(round(prop.table(
-      table(so$Phase,
-            so@meta.data[[so@misc$sel_res_col]]),
-      margin = 1)*100, digits = 2), margin = 2))))
+phase_cluster_counts <- as.data.frame.matrix(
+  table(so@meta.data[[so@misc$sel_res_col]],
+        so$Phase)
+)
+phase_cluster_counts <- data.frame(
+  cluster = rownames(phase_cluster_counts),
+  phase_cluster_counts,
+  check.names = FALSE
+)
+phase_cluster_row_pct <- as.data.frame.matrix(addmargins(round(prop.table(
+  table(so@meta.data[[so@misc$sel_res_col]],
+        so$Phase),
+  margin = 1)*100, digits = 2), margin = 2))
+phase_cluster_row_pct <- data.frame(
+  cluster = rownames(phase_cluster_row_pct),
+  phase_cluster_row_pct,
+  check.names = FALSE
+)
+phase_cluster_col_pct <- as.data.frame.matrix(addmargins(round(prop.table(
+  table(so$Phase,
+        so@meta.data[[so@misc$sel_res_col]]),
+  margin = 1)*100, digits = 2), margin = 2))
+phase_cluster_col_pct <- data.frame(
+  phase = rownames(phase_cluster_col_pct),
+  phase_cluster_col_pct,
+  check.names = FALSE
+)
+cat(as.character(report_asset_bar(
+  report_table_name("V03.16"),
+  report_tsv_download_link(phase_cluster_counts,
+                           report_table_name("V03.16", "phase_vs_cluster_counts.tsv"),
+                           "Counts TSV"),
+  report_tsv_download_link(phase_cluster_row_pct,
+                           report_table_name("V03.16", "phase_vs_cluster_cluster_pct.tsv"),
+                           "Cluster % TSV"),
+  report_tsv_download_link(phase_cluster_col_pct,
+                           report_table_name("V03.16", "phase_vs_cluster_phase_pct.tsv"),
+                           "Phase % TSV")
+)), "\n")
+print(knitr::kable(phase_cluster_counts))
+print(knitr::kable(phase_cluster_row_pct))
+print(knitr::kable(phase_cluster_col_pct))
 ```
 
-```{r phase_vs_clustering_plots1, fig.width=12, fig.height=6, echo=F}
+## Phase composition by cluster (Fig V03.17)
+
+```{r phase_vs_clustering_plots1, fig.width=12, fig.height=6, echo=F, results = "asis"}
 df <- as.data.frame(round(prop.table(table(so@meta.data[[so@misc$sel_res_col]],
         so$Phase), margin = 2)*100,
         digits = 2))
 colnames(df) <- c("cluster", "phase", "percentage")
-ggplot(df, aes(x = phase, y = percentage))+
+plot_obj <- ggplot(df, aes(x = phase, y = percentage))+
   geom_bar(stat = "identity", aes(fill = cluster))+
   theme_bw()+
   coord_flip()+
   scale_x_discrete(limits = rev(levels(df$phase))) +
   scale_fill_manual(values = so@misc$cluster_cols)
+bundle <- report_plot_bundle(
+  plot_obj,
+  block_prefix = "V03.17",
+  suffix = "phase_composition_by_cluster",
+  width = 12,
+  height = 6,
+  data = df,
+  plot_dir = plots_outdir,
+  data_dir = tables_outdir
+)
+cat(as.character(report_bundle_asset_bar(bundle$stem, bundle, tsv_label = "Download TSV")), "\n")
+print(plot_obj)
 ```
 
-```{r phase_vs_clustering_plots2, fig.width=12, fig.height=6, echo=F}
+## Cluster composition by phase (Fig V03.18)
+
+```{r phase_vs_clustering_plots2, fig.width=12, fig.height=6, echo=F, results = "asis"}
 df2 <- as.data.frame(round(prop.table(table(
          so$Phase,
          so@meta.data[[so@misc$sel_res_col]]), margin = 2)*100, digits = 2))
 colnames(df2) <- c("phase", "cluster", "percentage")
-ggplot(df2, aes(x = cluster, y = percentage))+
+plot_obj <- ggplot(df2, aes(x = cluster, y = percentage))+
   geom_bar(stat = "identity", aes(fill = phase))+
   theme_bw()+
   coord_flip()+
   scale_x_discrete(limits = rev(levels(df2$cluster))) +
   scale_fill_manual(values = so@misc$phase_cols)
+bundle <- report_plot_bundle(
+  plot_obj,
+  block_prefix = "V03.18",
+  suffix = "cluster_composition_by_phase",
+  width = 12,
+  height = 6,
+  data = df2,
+  plot_dir = plots_outdir,
+  data_dir = tables_outdir
+)
+cat(as.character(report_bundle_asset_bar(bundle$stem, bundle, tsv_label = "Download TSV")), "\n")
+print(plot_obj)
 ```
 
-## Phase by cell type
+# Phase by cell type
+
+## Phase vs. cell type counts and proportions (Tab V03.19)
 
 ```{r phase_vs_fine_celltype_tables, results="asis", echo=F}
-print(knitr::kable(as.data.frame.matrix(
-      table(so$pruned.labels_singleR_fine,
-            so$Phase))))
-print(knitr::kable(as.data.frame.matrix(addmargins(round(prop.table(
-      table(so$pruned.labels_singleR_fine,
-            so$Phase),
-      margin = 1)*100, digits = 2), margin = 2))))
-print(knitr::kable(as.data.frame.matrix(addmargins(round(prop.table(
-      table(so$Phase,
-            so$pruned.labels_singleR_fine),
-      margin = 1)*100, digits = 2), margin = 2))))
+phase_celltype_counts <- as.data.frame.matrix(
+  table(so$pruned.labels_singleR_fine,
+        so$Phase)
+)
+phase_celltype_counts <- data.frame(
+  cell_type = rownames(phase_celltype_counts),
+  phase_celltype_counts,
+  check.names = FALSE
+)
+phase_celltype_row_pct <- as.data.frame.matrix(addmargins(round(prop.table(
+  table(so$pruned.labels_singleR_fine,
+        so$Phase),
+  margin = 1)*100, digits = 2), margin = 2))
+phase_celltype_row_pct <- data.frame(
+  cell_type = rownames(phase_celltype_row_pct),
+  phase_celltype_row_pct,
+  check.names = FALSE
+)
+phase_celltype_col_pct <- as.data.frame.matrix(addmargins(round(prop.table(
+  table(so$Phase,
+        so$pruned.labels_singleR_fine),
+  margin = 1)*100, digits = 2), margin = 2))
+phase_celltype_col_pct <- data.frame(
+  phase = rownames(phase_celltype_col_pct),
+  phase_celltype_col_pct,
+  check.names = FALSE
+)
+cat(as.character(report_asset_bar(
+  report_table_name("V03.19"),
+  report_tsv_download_link(phase_celltype_counts,
+                           report_table_name("V03.19", "phase_vs_fine_celltype_counts.tsv"),
+                           "Counts TSV"),
+  report_tsv_download_link(phase_celltype_row_pct,
+                           report_table_name("V03.19", "phase_vs_fine_celltype_celltype_pct.tsv"),
+                           "Cell type % TSV"),
+  report_tsv_download_link(phase_celltype_col_pct,
+                           report_table_name("V03.19", "phase_vs_fine_celltype_phase_pct.tsv"),
+                           "Phase % TSV")
+)), "\n")
+print(knitr::kable(phase_celltype_counts))
+print(knitr::kable(phase_celltype_row_pct))
+print(knitr::kable(phase_celltype_col_pct))
 ```
 
-```{r phase_vs_fine_celltype_plots1, fig.width=12, fig.height=6, echo=F}
+## Phase composition by cell type (Fig V03.20)
+
+```{r phase_vs_fine_celltype_plots1, fig.width=12, fig.height=6, echo=F, results = "asis"}
 df <- as.data.frame(round(prop.table(table(
         so$pruned.labels_singleR_fine,
         so$Phase), margin = 2)*100,
         digits = 2))
 colnames(df) <- c("cell_type", "phase", "percentage")
-ggplot(df, aes(x = phase, y = percentage))+
+plot_obj <- ggplot(df, aes(x = phase, y = percentage))+
   geom_bar(stat = "identity", aes(fill = cell_type))+
   theme_bw()+
   coord_flip()+
   scale_x_discrete(limits = rev(levels(df$phase))) +
   scale_fill_manual(values = so@misc$colors$celltypes)
+bundle <- report_plot_bundle(
+  plot_obj,
+  block_prefix = "V03.20",
+  suffix = "phase_composition_by_fine_celltype",
+  width = 12,
+  height = 6,
+  data = df,
+  plot_dir = plots_outdir,
+  data_dir = tables_outdir
+)
+cat(as.character(report_bundle_asset_bar(bundle$stem, bundle, tsv_label = "Download TSV")), "\n")
+print(plot_obj)
 ```
 
-```{r phase_vs_fine_celltype_plots2, fig.width=12, fig.height=6, echo=F}
+## Cell type composition by phase (Fig V03.21)
+
+```{r phase_vs_fine_celltype_plots2, fig.width=12, fig.height=6, echo=F, results = "asis"}
 df2 <- as.data.frame(round(prop.table(table(
          so$Phase,
          so$pruned.labels_singleR_fine), margin = 2)*100, digits = 2))
 colnames(df2) <- c("phase", "cell_type", "percentage")
-ggplot(df2, aes(x = cell_type, y = percentage))+
+plot_obj <- ggplot(df2, aes(x = cell_type, y = percentage))+
   geom_bar(stat = "identity", aes(fill = phase))+
   theme_bw()+
   coord_flip()+
   scale_x_discrete(limits = rev(levels(df2$cell_type))) +
   scale_fill_manual(values = so@misc$phase_cols)
+bundle <- report_plot_bundle(
+  plot_obj,
+  block_prefix = "V03.21",
+  suffix = "fine_celltype_composition_by_phase",
+  width = 12,
+  height = 6,
+  data = df2,
+  plot_dir = plots_outdir,
+  data_dir = tables_outdir
+)
+cat(as.character(report_bundle_asset_bar(bundle$stem, bundle, tsv_label = "Download TSV")), "\n")
+print(plot_obj)
 ```
 
-## Session info
+# Session info
 
 ```{r, echo=F}
 sessionInfo()
