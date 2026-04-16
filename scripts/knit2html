@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+set -euo pipefail
+
 if [ $# -lt 1 ]; then
   echo "Knit a Rmd to HTML" > /dev/stderr
   echo "Usage: knit2html <Rmdfile> [param1=value1] [param2=value2] ..." > /dev/stderr
@@ -9,73 +11,35 @@ elif [ ! -e "$1" ]; then
   exit 1
 fi
 
-RMD_FILE=$1
-shift  # Remove RMD_FILE from the positional parameters
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
+RMD_FILE="$1"
+shift
 
-TIME_FILE="${RMD_FILE%.*}.time"
-
-# Initialize an empty string to hold the R parameters
-R_PARAMS="list("
-
-# Loop through the remaining arguments
-for ARG in "$@"; do
-  KEY="${ARG%=*}"
-  VALUE="${ARG#*=}"
-  R_PARAMS+="$KEY='$VALUE', "
-done
-
-# Remove the trailing comma and space, and close the list
-R_PARAMS="${R_PARAMS%, })"
-
-/usr/bin/time -o "$TIME_FILE" \
-  Rscript -e "rmarkdown::render('$RMD_FILE', output_format='html_document', params=$R_PARAMS)"
-R_STATUS=$?
-
-# create final running report using .time file, username, system name, and timestamp
-# and more system information
-RUNINFO_FILE="${RMD_FILE%.*}.runinfo"
-RUNINFO_FILE=$(realpath $RUNINFO_FILE)
-rm -rf $RUNINFO_FILE
-
-echo "# Basic information" >> "$RUNINFO_FILE"
-echo "User: $(whoami)" >> "$RUNINFO_FILE"
-echo "System: $(hostname)" >> "$RUNINFO_FILE"
-echo "Date: $(date)" >> "$RUNINFO_FILE"
-echo "" >> "$RUNINFO_FILE"
-
-echo "# Command information" >> "$RUNINFO_FILE"
-echo "Absolute path of command: $(realpath $0)" >> "$RUNINFO_FILE"
-echo "Absolute path of Rmd file: $(realpath $RMD_FILE)" >> "$RUNINFO_FILE"
-echo "Absolute path of Rscript: $(which Rscript)" >> "$RUNINFO_FILE"
-echo -n "Rscript version: " >> "$RUNINFO_FILE"
-Rscript --version >> "$RUNINFO_FILE"
-echo "Parameters: $R_PARAMS" >> "$RUNINFO_FILE"
-echo "" >> "$RUNINFO_FILE"
-
-echo "# Resources used" >> "$RUNINFO_FILE"
-echo "Output of GNU time:" >> "$RUNINFO_FILE"
-cat "$TIME_FILE" >> "$RUNINFO_FILE"
-echo "" >> "$RUNINFO_FILE"
-
-echo "# System information" >> "$RUNINFO_FILE"
-echo "OS: $(uname -s)" >> "$RUNINFO_FILE"
-echo "Kernel: $(uname -r)" >> "$RUNINFO_FILE"
-echo "CPU architecture: $(uname -p)" >> "$RUNINFO_FILE"
-echo "$(grep MemTotal /proc/meminfo)" >> "$RUNINFO_FILE"
-echo "Number of logical CPUs: $(nproc)" >> "$RUNINFO_FILE"
-echo "" >> "$RUNINFO_FILE"
-
-echo "# Disk space" >> "$RUNINFO_FILE"
-echo "Disk space left on Rmd file partition (after running):" >> "$RUNINFO_FILE"
-echo "$(df -h $(dirname $TIME_FILE))" >> "$RUNINFO_FILE"
-TIME_FILE=$(realpath $TIME_FILE)
-TIME_FILE_DIR=$(dirname $TIME_FILE)
-if [[ $TIME_FILE_DIR == *rundir ]]; then
-  echo "Space used by the step directory (after running):" >> "$RUNINFO_FILE"
-  cd $TIME_FILE_DIR/..
-  echo "$(du -sh *)" >> "$RUNINFO_FILE"
-  cd - > /dev/null
+if [[ "$RMD_FILE" != /* ]]; then
+  RMD_FILE="$PWD/$RMD_FILE"
 fi
-rm $TIME_FILE
-echo "" >> "$RUNINFO_FILE"
-exit "$R_STATUS"
+
+# If Rmd is in a scripts/ directory, copy it to the sibling rundir/ and run from there
+RMD_DIR="$(dirname "$RMD_FILE")"
+if [[ "$(basename "$RMD_DIR")" == "scripts" ]]; then
+  RUNDIR="$(dirname "$RMD_DIR")/rundir"
+  mkdir -p "$RUNDIR"
+  ln -sf "$RMD_FILE" "$RUNDIR/$(basename "$RMD_FILE")"
+  RMD_FILE="$RUNDIR/$(basename "$RMD_FILE")"
+fi
+
+cd "$PROJECT_ROOT"
+export R_PROFILE_USER="$PROJECT_ROOT/.Rprofile"
+export REPORTDECK_COMMAND_PATH="$(realpath "$0")"
+
+Rscript -e '
+  dev_path <- Sys.getenv("REPORTDECK_DEV_PATH", unset = "")
+  if (nzchar(dev_path) && dir.exists(dev_path)) {
+    if (!requireNamespace("pkgload", quietly = TRUE)) {
+      stop("pkgload is required to load rmdreportdeck from source.", call. = FALSE)
+    }
+    pkgload::load_all(dev_path, quiet = TRUE)
+  }
+  rmdreportdeck::knit2html_cli(commandArgs(trailingOnly = TRUE))
+' "$RMD_FILE" "$@"
