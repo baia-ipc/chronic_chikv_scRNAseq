@@ -26,3 +26,4 @@ geo-submission/
 documents/chikv/
 *.time
 .nfs*
+.claude
