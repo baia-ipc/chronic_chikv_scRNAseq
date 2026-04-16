@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [ $# -lt 1 ]; then
+  echo "Pack a Rmd into a portable self-contained HTML" > /dev/stderr
+  echo "Usage: packhtml <Rmdfile> [param1=value1] [param2=value2] ..." > /dev/stderr
+  exit 1
+elif [ ! -e "$1" ]; then
+  echo "File does not exist: $1" > /dev/stderr
+  exit 1
+fi
+
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
+RMD_FILE="$1"
+shift
+
+if [[ "$RMD_FILE" != /* ]]; then
+  RMD_FILE="$PWD/$RMD_FILE"
+fi
+
+# If Rmd is in a scripts/ directory, copy it to the sibling rundir/ and run from there
+RMD_DIR="$(dirname "$RMD_FILE")"
+if [[ "$(basename "$RMD_DIR")" == "scripts" ]]; then
+  RUNDIR="$(dirname "$RMD_DIR")/rundir"
+  mkdir -p "$RUNDIR"
+  ln -sf "$RMD_FILE" "$RUNDIR/$(basename "$RMD_FILE")"
+  RMD_FILE="$RUNDIR/$(basename "$RMD_FILE")"
+fi
+
+cd "$PROJECT_ROOT"
+export R_PROFILE_USER="$PROJECT_ROOT/.Rprofile"
+export REPORTDECK_COMMAND_PATH="$(realpath "$0")"
+
+Rscript -e '
+  dev_path <- Sys.getenv("REPORTDECK_DEV_PATH", unset = "")
+  if (nzchar(dev_path) && dir.exists(dev_path)) {
+    if (!requireNamespace("pkgload", quietly = TRUE)) {
+      stop("pkgload is required to load rmdreportdeck from source.", call. = FALSE)
+    }
+    pkgload::load_all(dev_path, quiet = TRUE)
+  }
+  rmdreportdeck::packhtml_cli(commandArgs(trailingOnly = TRUE))
+' "$RMD_FILE" "$@"
