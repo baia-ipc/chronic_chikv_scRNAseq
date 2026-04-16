@@ -1,5 +1,5 @@
 ---
-title: "Chikv | CellChat hierarchy plots"
+title: "`r paste('Chikv | CellChat hierarchy plots', switch(params$pair, A_C_vs_NC='Acute - Chronic vs Non-Chronic', '6m_C_vs_NC'='6 months - Chronic vs Non-Chronic', NC_A_vs_6m='Non-Chronic - Acute vs 6 months', C_A_vs_6m='Chronic - Acute vs 6 months'), c(all='unfiltered', pfilt='p-value filtered')[params$sfx], sep=' | ')`"
 author: "Giorgio Gonnella"
 date: "`r Sys.Date()`"
 output:
@@ -10,7 +10,7 @@ params:
   input_step: "07.P.compute_cellchat"
   input_rds: "so_w_cellchat.rds"
   this_step: "07.V.cellchat_results"
-  pair: "A_NC_vs_C"
+  pair: "A_C_vs_NC"
   sfx:  "pfilt"
 ---
 
@@ -20,6 +20,9 @@ withr::with_dir(here::here(), { source("renv/activate.R") })
 
 library(Seurat)
 library(CellChat)
+library(rmdreportdeck)
+reportdeck_setup()
+knitr::opts_chunk$set(cache=F)
 
 analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
 input_var_dir <- paste0(analysis_root, "steps/", params$input_step, "/results/vars/")
@@ -30,8 +33,8 @@ if (!dir.exists(this_step_dir))
   stop("Current step directory does not exist: ", this_step_dir)
 
 pair_map <- list(
-  A_NC_vs_C    = c("A_NC",  "A_C"),
-  `6m_NC_vs_C` = c("6m_NC", "6m_C"),
+  A_C_vs_NC    = c("A_NC",  "A_C"),
+  `6m_C_vs_NC` = c("6m_NC", "6m_C"),
   NC_A_vs_6m   = c("A_NC",  "6m_NC"),
   C_A_vs_6m    = c("A_C",   "6m_C")
 )
@@ -42,6 +45,7 @@ conds  <- pair_map[[params$pair]]
 nm1    <- conds[1]; nm2 <- conds[2]
 sfx    <- params$sfx
 thresh <- if (sfx == "pfilt") 0.05 else 1
+pfx    <- paste0(params$pair, ".", sfx)
 
 plots_outdir <- paste0(this_step_dir, "results/", params$pair, "/", sfx, "/plots/")
 dir.create(plots_outdir, recursive = TRUE, showWarnings = FALSE)
@@ -57,18 +61,64 @@ idx <- list(
 )
 
 .fig_counter <- 0L
+
+pretty_cell_group <- function(x) {
+  gsub("_", " ", x, fixed = TRUE)
+}
+
+safe_asset_suffix <- function(x) {
+  gsub("[^A-Za-z0-9_.-]+", "_", x)
+}
+
+write_tsv <- function(x, path) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  write.table(x, file = path, sep = "\t", quote = FALSE, row.names = FALSE, na = "")
+  invisible(path)
+}
+
+matrix_to_long <- function(m, value_name = "value") {
+  out <- expand.grid(source = rownames(m), target = colnames(m), stringsAsFactors = FALSE)
+  out[[value_name]] <- as.vector(m)
+  out
+}
+
+pathway_matrix_df <- function(cc_obj, condition, pathway, receiver_group, receiver_idx) {
+  lr_names <- dimnames(cc_obj@net$prob)[[3]]
+  pw_map <- cc_obj@LR$LRsig[lr_names, "pathway_name"]
+  lr_idx <- which(pw_map == pathway)
+  prob <- cc_obj@netP$prob[, , pathway, drop = TRUE]
+  count <- if (length(lr_idx) == 0) prob * 0 else
+    apply(cc_obj@net$prob[, , lr_idx, drop = FALSE] > 0, c(1, 2), sum)
+  receiver_cells <- levels(cc_obj@idents)[receiver_idx]
+  df <- matrix_to_long(prob, value_name = "communication_probability")
+  df$lr_interaction_count <- as.vector(count)
+  df$condition <- condition
+  df$pathway <- pathway
+  df$receiver_group <- receiver_group
+  df$receiver_in_group <- df$target %in% receiver_cells
+  df[, c("condition", "pathway", "receiver_group", "receiver_in_group",
+         "source", "target", "lr_interaction_count", "communication_probability")]
+}
+
+report_href <- function(path) {
+  file.path("..", "results", params$pair, sfx, "plots", path)
+}
+
+h <- function(level, text) {
+  writeLines(c("", paste0(strrep("#", level), " ", text), ""))
+}
 ```
+
+# Goal
+
+Visualize CellChat ligand–receptor signaling as hierarchy plots for a given condition pair and
+filter setting. Each panel shows the communication network for one pathway and one receiver
+cell group, with sender and receiver cells arranged hierarchically.
 
 ```{r load_so}
 so <- readRDS(file = paste0(input_var_dir, params$input_rds))
 cc <- so@misc$cc[[sfx]]
 ```
-
----
-
-Report: **`r params$pair`** — filter: **`r sfx`**
-
----
 
 ```{r hierarchy_render, include=FALSE}
 hierarchy_items <- list()
@@ -81,6 +131,7 @@ for (nm in c(nm1, nm2)) {
       fstem    <- paste0(nm, ".", sfx, ".", gsub(" ", "_", pathway), "_receiver_", cg)
       png_path <- file.path(outdir, paste0(fstem, "_hierarchy.png"))
       pdf_path <- file.path(outdir, paste0(fstem, "_hierarchy.pdf"))
+      tsv_path <- file.path(outdir, paste0(fstem, "_hierarchy.tsv"))
 
       for (dev_fn in list(
         list(fn = function(p) png(p, width = 900, height = 1200), path = png_path),
@@ -96,18 +147,53 @@ for (nm in c(nm1, nm2)) {
         invisible(dev.off())
       }
 
-      hierarchy_items[[length(hierarchy_items) + 1]] <-
-        list(label = paste0(nm, ": ", pathway, " \u2014 ", cg), png = png_path)
+      write_tsv(pathway_matrix_df(cc[[nm]], nm, pathway, pretty_cell_group(cg), idx[[cg]]),
+                tsv_path)
+
+      hierarchy_items[[length(hierarchy_items) + 1]] <- list(
+        condition = nm,
+        pathway = pathway,
+        cell_group = cg,
+        cell_group_label = pretty_cell_group(cg),
+        suffix = safe_asset_suffix(paste(nm, pathway, cg, sep = ".")),
+        png = report_href(file.path("hierarchy", nm, basename(png_path))),
+        pdf = report_href(file.path("hierarchy", nm, basename(pdf_path))),
+        tsv = report_href(file.path("hierarchy", nm, basename(tsv_path))),
+        png_filename = basename(png_path),
+        pdf_filename = basename(pdf_path),
+        tsv_filename = basename(tsv_path)
+      )
     }
   }
 }
 ```
 
 ```{r hierarchy_display, results='asis'}
+current_condition <- NULL
+current_pathway <- NULL
 for (item in hierarchy_items) {
-  .fig_counter <<- .fig_counter + 1L
-  lbl <- paste0(params$pair, ".", sfx, ".Fig", .fig_counter, " \u2014 ", item$label)
-  writeLines(c(paste0("### ", lbl), "", paste0("![](", item$png, ")"), ""))
+  if (!identical(current_condition, item$condition)) {
+    current_condition <- item$condition
+    current_pathway <- NULL
+    h(1, item$condition)
+  }
+  if (!identical(current_pathway, item$pathway)) {
+    current_pathway <- item$pathway
+    h(2, item$pathway)
+  }
+  h(3, item$cell_group_label)
+  .fig_counter <- .fig_counter + 1L
+  fig_id <- paste0(.fig_counter, ".", pfx)
+
+  cat(as.character(report_asset_bar(
+    report_figure_name(fig_id, suffix = item$suffix),
+    report_download_link("Download PNG", item$png_filename, item$png),
+    report_download_link("Download PDF", item$pdf_filename, item$pdf),
+    report_download_link("Download TSV", item$tsv_filename, item$tsv)
+  )), "\n")
+  cat(paste0("**Fig ", .fig_counter, ". ", item$condition, " - ",
+             item$pathway, " - ", item$cell_group_label, "**\n\n"))
+  cat(paste0('<img src="', item$png, '" width="672" />', "\n\n"))
 }
 ```
 

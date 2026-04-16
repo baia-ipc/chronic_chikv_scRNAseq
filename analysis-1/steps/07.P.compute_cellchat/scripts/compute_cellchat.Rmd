@@ -162,8 +162,8 @@ for (grp_name in names(groups)) {
 ```{r derived_setup}
 # pair_map: defines which two conditions are compared per pair
 pair_map <- list(
-  A_NC_vs_C    = c("A_NC",  "A_C"),
-  `6m_NC_vs_C` = c("6m_NC", "6m_C"),
+  A_C_vs_NC    = c("A_NC",  "A_C"),
+  `6m_C_vs_NC` = c("6m_NC", "6m_C"),
   NC_A_vs_6m   = c("A_NC",  "6m_NC"),
   C_A_vs_6m    = c("A_C",   "6m_C")
 )

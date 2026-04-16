@@ -1,20 +1,42 @@
 #!/usr/bin/env bash
 # Run all three CellChat Rmds × 4 pairs × 2 filter modes = 24 jobs in parallel.
 #
-# Output HTMLs: rundir/cellchat_{results,circle,hierarchy}.{pair}.{sfx}.html
-# PDFs:         results/{pair}/{sfx}/plots/
+# Output HTMLs: rundir/cellchat_{results,circle,hierarchy}.{pair}.{sfx}.linked.html
 
 set -euo pipefail
 
-cd "$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+THISSCRIPTDIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+cd "$(git -C "$THISSCRIPTDIR" rev-parse --show-toplevel)"
+KNIT2HTML=$(realpath scripts/knit2html)
+
+RMDS=(cellchat_results cellchat_circle cellchat_hierarchy)
+PAIRS=(A_C_vs_NC 6m_C_vs_NC NC_A_vs_6m C_A_vs_6m)
+SFXS=(all pfilt)
 
 SCRIPTS=analysis-1/steps/07.V.cellchat_results/scripts
 OUTDIR=$(realpath analysis-1/steps/07.V.cellchat_results/rundir)
-ROOT=$(pwd)
+mkdir -p "$OUTDIR"
 
-RMDS=(cellchat_results cellchat_circle cellchat_hierarchy)
-PAIRS=(A_NC_vs_C 6m_NC_vs_C NC_A_vs_6m C_A_vs_6m)
-SFXS=(all pfilt)
+# Create per-combination symlinks so knit2html produces distinctly named outputs
+for rmd in "${RMDS[@]}"; do
+  for pair in "${PAIRS[@]}"; do
+    for sfx in "${SFXS[@]}"; do
+      ln -sf "${rmd}.Rmd" "${SCRIPTS}/${rmd}.${pair}.${sfx}.Rmd"
+    done
+  done
+done
+
+# Remove symlinks on exit (success or failure)
+cleanup() {
+  for rmd in "${RMDS[@]}"; do
+    for pair in "${PAIRS[@]}"; do
+      for sfx in "${SFXS[@]}"; do
+        rm -f "${SCRIPTS}/${rmd}.${pair}.${sfx}.Rmd"
+      done
+    done
+  done
+}
+trap cleanup EXIT
 
 pids=()
 labels=()
@@ -22,22 +44,10 @@ labels=()
 for rmd in "${RMDS[@]}"; do
   for pair in "${PAIRS[@]}"; do
     for sfx in "${SFXS[@]}"; do
-      OUT_HTML="${OUTDIR}/${rmd}.${pair}.${sfx}.html"
-      LOG_FILE="${OUTDIR}/${rmd}.${pair}.${sfx}.log"
+      LOG="${OUTDIR}/${rmd}.${pair}.${sfx}.log"
       echo "$(date '+%F %T')  START  ${rmd}  pair=${pair}  sfx=${sfx}"
-      INTER_DIR="/tmp/rmd_intermediates/${rmd}.${pair}.${sfx}"
-      mkdir -p "${INTER_DIR}"
-      Rscript -e "
-        withr::with_dir('${ROOT}', {
-          rmarkdown::render(
-            '${SCRIPTS}/${rmd}.Rmd',
-            output_format    = 'html_document',
-            output_file      = '${OUT_HTML}',
-            intermediates_dir = '${INTER_DIR}',
-            params           = list(pair='${pair}', sfx='${sfx}')
-          )
-        })
-      " > "${LOG_FILE}" 2>&1 &
+      "$KNIT2HTML" "${SCRIPTS}/${rmd}.${pair}.${sfx}.Rmd" "pair=${pair}" "sfx=${sfx}" \
+        > "$LOG" 2>&1 &
       pids+=($!)
       labels+=("${rmd}.${pair}.${sfx}")
     done
@@ -62,5 +72,5 @@ if [ "$failed" -gt 0 ]; then
   exit 1
 fi
 
-echo "All 24 reports done."
+echo "All ${#pids[@]} reports done."
 echo "HTML files in: ${OUTDIR}"

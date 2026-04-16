@@ -1,5 +1,5 @@
 ---
-title: "Chikv | CellChat circle plots"
+title: "`r paste('Chikv | CellChat circle plots', switch(params$pair, A_C_vs_NC='Acute - Chronic vs Non-Chronic', '6m_C_vs_NC'='6 months - Chronic vs Non-Chronic', NC_A_vs_6m='Non-Chronic - Acute vs 6 months', C_A_vs_6m='Chronic - Acute vs 6 months'), c(all='unfiltered', pfilt='p-value filtered')[params$sfx], sep=' | ')`"
 author: "Giorgio Gonnella"
 date: "`r Sys.Date()`"
 output:
@@ -10,7 +10,7 @@ params:
   input_step: "07.P.compute_cellchat"
   input_rds: "so_w_cellchat.rds"
   this_step: "07.V.cellchat_results"
-  pair: "A_NC_vs_C"
+  pair: "A_C_vs_NC"
   sfx:  "pfilt"
 ---
 
@@ -20,6 +20,9 @@ withr::with_dir(here::here(), { source("renv/activate.R") })
 
 library(Seurat)
 library(CellChat)
+library(rmdreportdeck)
+reportdeck_setup()
+knitr::opts_chunk$set(cache=F)
 
 analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
 input_var_dir <- paste0(analysis_root, "steps/", params$input_step, "/results/vars/")
@@ -30,8 +33,8 @@ if (!dir.exists(this_step_dir))
   stop("Current step directory does not exist: ", this_step_dir)
 
 pair_map <- list(
-  A_NC_vs_C    = c("A_NC",  "A_C"),
-  `6m_NC_vs_C` = c("6m_NC", "6m_C"),
+  A_C_vs_NC    = c("A_NC",  "A_C"),
+  `6m_C_vs_NC` = c("6m_NC", "6m_C"),
   NC_A_vs_6m   = c("A_NC",  "6m_NC"),
   C_A_vs_6m    = c("A_C",   "6m_C")
 )
@@ -42,23 +45,58 @@ conds  <- pair_map[[params$pair]]
 nm1    <- conds[1]; nm2 <- conds[2]
 sfx    <- params$sfx
 thresh <- if (sfx == "pfilt") 0.05 else 1
+pfx    <- paste0(params$pair, ".", sfx)
 
 plots_outdir <- paste0(this_step_dir, "results/", params$pair, "/", sfx, "/plots/")
 dir.create(plots_outdir, recursive = TRUE, showWarnings = FALSE)
 
-.fig_counter <- 0L
+report_href <- function(path) {
+  file.path("..", "results", params$pair, sfx, "plots", path)
+}
+
+safe_asset_suffix <- function(x) {
+  gsub("[^A-Za-z0-9_.-]+", "_", x)
+}
+
+write_tsv <- function(x, path) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  write.table(x, file = path, sep = "\t", quote = FALSE, row.names = FALSE, na = "")
+  invisible(path)
+}
+
+matrix_to_long <- function(m, value_name = "value") {
+  out <- expand.grid(source = rownames(m), target = colnames(m), stringsAsFactors = FALSE)
+  out[[value_name]] <- as.vector(m)
+  out
+}
+
+pathway_matrix_df <- function(cc_obj, condition, pathway) {
+  lr_names <- dimnames(cc_obj@net$prob)[[3]]
+  pw_map <- cc_obj@LR$LRsig[lr_names, "pathway_name"]
+  lr_idx <- which(pw_map == pathway)
+  prob <- cc_obj@netP$prob[, , pathway, drop = TRUE]
+  count <- if (length(lr_idx) == 0) prob * 0 else
+    apply(cc_obj@net$prob[, , lr_idx, drop = FALSE] > 0, c(1, 2), sum)
+  df <- matrix_to_long(prob, value_name = "communication_probability")
+  df$lr_interaction_count <- as.vector(count)
+  df$condition <- condition
+  df$pathway <- pathway
+  df[, c("condition", "pathway", "source", "target",
+         "lr_interaction_count", "communication_probability")]
+}
+
 ```
+
+# Goal
+
+Visualize CellChat ligand–receptor signaling as circle plots for a given condition pair and
+filter setting. Each panel shows the aggregated communication network (by pathway) for one
+condition, rendered as a chord diagram with cell types as nodes.
 
 ```{r load_so}
 so <- readRDS(file = paste0(input_var_dir, params$input_rds))
 cc <- so@misc$cc[[sfx]]
 ```
-
----
-
-Report: **`r params$pair`** — filter: **`r sfx`**
-
----
 
 ```{r circle_render, include=FALSE}
 circle_items <- list()
@@ -67,9 +105,13 @@ for (nm in c(nm1, nm2)) {
   outdir       <- file.path(plots_outdir, "circle", nm)
   dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
   for (pathway in all_pathways) {
-    fstem    <- paste0(nm, ".", sfx, ".", gsub(" ", "_", pathway))
-    png_path <- file.path(outdir, paste0(fstem, "_circle.png"))
-    pdf_path <- file.path(outdir, paste0(fstem, "_circle.pdf"))
+    fstem        <- paste0(nm, ".", sfx, ".", gsub(" ", "_", pathway))
+    png_filename <- paste0(fstem, "_circle.png")
+    pdf_filename <- paste0(fstem, "_circle.pdf")
+    tsv_filename <- paste0(fstem, "_circle.tsv")
+    png_path     <- file.path(outdir, png_filename)
+    pdf_path     <- file.path(outdir, pdf_filename)
+    tsv_path     <- file.path(outdir, tsv_filename)
 
     png(png_path, width = 900, height = 900)
     netVisual_aggregate(cc[[nm]], signaling = pathway, layout = "circle", thresh = thresh)
@@ -81,17 +123,60 @@ for (nm in c(nm1, nm2)) {
     title(paste0(nm, " (", sfx, "): ", pathway))
     invisible(dev.off())
 
-    circle_items[[length(circle_items) + 1]] <-
-      list(label = paste0(nm, ": ", pathway), png = png_path)
+    write_tsv(pathway_matrix_df(cc[[nm]], nm, pathway), tsv_path)
+
+    circle_items[[length(circle_items) + 1]] <- list(
+      nm           = nm,
+      label        = paste0(nm, ": ", pathway),
+      suffix       = safe_asset_suffix(paste(nm, pathway, sep = ".")),
+      png_href     = report_href(file.path("circle", nm, png_filename)),
+      pdf_href     = report_href(file.path("circle", nm, pdf_filename)),
+      tsv_href     = report_href(file.path("circle", nm, tsv_filename)),
+      png_filename = png_filename,
+      pdf_filename = pdf_filename,
+      tsv_filename = tsv_filename
+    )
   }
 }
 ```
 
 ```{r circle_display, results='asis'}
+fig_counter  <- 0L
+items_by_nm  <- list()
+nm_order     <- character(0)
+
 for (item in circle_items) {
-  .fig_counter <<- .fig_counter + 1L
-  lbl <- paste0(params$pair, ".", sfx, ".Fig", .fig_counter, " \u2014 ", item$label)
-  writeLines(c(paste0("### ", lbl), "", paste0("![](", item$png, ")"), ""))
+  fig_counter  <- fig_counter + 1L
+  figure_id    <- paste0(fig_counter, ".", pfx)
+  panel_title  <- paste0(item$label, " (Fig ", fig_counter, ")")
+
+  panel <- report_item_panel(
+    title     = panel_title,
+    id        = paste0("circle-", item$suffix),
+    asset_bar = report_asset_bar(
+      report_figure_name(figure_id, suffix = item$suffix),
+      report_download_link("Download PNG", item$png_filename, item$png_href),
+      report_download_link("Download PDF", item$pdf_filename, item$pdf_href),
+      report_download_link("Download TSV", item$tsv_filename, item$tsv_href)
+    ),
+    htmltools::HTML(paste0('<img src="', item$png_href, '" width="672" style="max-width:100%;" />'))
+  )
+
+  if (!item$nm %in% nm_order) {
+    nm_order              <- c(nm_order, item$nm)
+    items_by_nm[[item$nm]] <- list()
+  }
+  items_by_nm[[item$nm]][[length(items_by_nm[[item$nm]]) + 1L]] <- panel
+}
+
+for (nm in nm_order) {
+  cat(paste0("\n\n# ", nm, "\n\n"))
+  cat(as.character(report_loop_section(
+    items_by_nm[[nm]],
+    open_first = TRUE,
+    max_open   = 1L,
+    level      = 2L
+  )))
 }
 ```
 
