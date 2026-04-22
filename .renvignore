@@ -1,0 +1,8 @@
+analysis-1/steps/obsolete/
+analysis-*/steps/*/results/**
+analysis-*/steps/*/rundir/**
+analysis-*/steps/*/scripts/old/**
+analysis-*/steps/*/scripts/*_files/**
+analysis-*/steps/*/scripts/*.linked_files/**
+analysis-*/steps/*/scripts/*.pack_files/**
+analysis-*/steps/*/scripts/**/reportdeck/**
