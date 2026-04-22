@@ -25,6 +25,7 @@ Options:
 from __future__ import annotations
 
 import os
+import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -34,6 +35,12 @@ from docopt import docopt
 from loguru import logger
 
 VERSION = "0.1.0"
+LOCAL_HREF_SRC_RE = re.compile(
+    r"""(?:href|src)=(["'])"""
+    r"""(?P<ref>(?!data:|https?:|mailto:|#|javascript:)[^"'>]+)"""
+    r"""\1""",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -80,6 +87,17 @@ def unique_output_dir(results_dir: Path, prefix: str) -> Path:
         if not suffixed.exists():
             return suffixed
         index += 1
+
+
+def local_href_src_refs(path: Path, limit: int = 5) -> list[str]:
+    refs: list[str] = []
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            for match in LOCAL_HREF_SRC_RE.finditer(line):
+                refs.append(match.group("ref"))
+                if len(refs) >= limit:
+                    return refs
+    return refs
 
 
 def report_manifest() -> list[Report]:
@@ -155,18 +173,44 @@ def link_reports(
     write_index: bool,
 ) -> int:
     reports = report_manifest()
+
+    missing: list[Report] = []
+    invalid_refs: list[tuple[Report, Path, list[str]]] = []
+    for report in reports:
+        source = analysis_dir / report.source
+        if not source.exists():
+            missing.append(report)
+            continue
+        refs = local_href_src_refs(source)
+        if refs:
+            invalid_refs.append((report, source, refs))
+
+    if invalid_refs:
+        logger.error(
+            "Portable HTML collection aborted: {} report(s) contain external "
+            "local href/src references.",
+            len(invalid_refs),
+        )
+        for report, source, refs in invalid_refs:
+            logger.error("Report: {} -> {}", source, report.output_name)
+            for ref in refs:
+                logger.error("  local href/src: {}", ref)
+        logger.error(
+            "Re-render these reports so all portable HTML assets are embedded "
+            "as data URIs."
+        )
+        return 1
+
     output_dir = unique_output_dir(results_dir, prefix)
     output_dir.mkdir(parents=True)
 
     collected: list[tuple[Report, Path, os.stat_result]] = []
-    missing: list[Report] = []
     total_size = 0
 
     for report in reports:
         source = analysis_dir / report.source
         target = output_dir / report.output_name
         if not source.exists():
-            missing.append(report)
             continue
         os.link(source, target)
         stat = source.stat()
