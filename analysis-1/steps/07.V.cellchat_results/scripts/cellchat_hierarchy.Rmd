@@ -1,112 +1,54 @@
 ---
-title: "`r paste('Chikv | CellChat hierarchy plots', switch(params$pair, A_C_vs_NC='Acute - Chronic vs Non-Chronic', '6m_C_vs_NC'='6 months - Chronic vs Non-Chronic', NC_A_vs_6m='Non-Chronic - Acute vs 6 months', C_A_vs_6m='Chronic - Acute vs 6 months'), c(all='unfiltered', pfilt='p-value filtered')[params$sfx], sep=' | ')`"
-author: "Giorgio Gonnella"
+title: "`r paste(c(params$report_title_prefix, 'CellChat hierarchy plots', if (params$pair %in% names(params$pair_labels)) params$pair_labels[[params$pair]] else params$pair, if (params$sfx %in% names(params$filter_labels)) params$filter_labels[[params$sfx]] else params$sfx), collapse = ' | ')`"
+author: "`r params$author`"
 date: "`r Sys.Date()`"
 output:
   html_document:
     theme: sandstone
 params:
-  analysis: "1"
-  input_step: "07.P.compute_cellchat"
-  input_rds: "so_w_cellchat.rds"
-  this_step: "07.V.cellchat_results"
+  input_rds: "../../07.P.compute_cellchat/results/vars/so_w_cellchat.rds"
+  author: "Giorgio Gonnella"
   pair: "A_C_vs_NC"
   sfx:  "pfilt"
+  filter_mode: "pfilt"
+  pval_threshold: 0.05
+  output_dir: "../results"
+  output_href_prefix: "../results"
+  pair_definitions: !r list(A_C_vs_NC = c("A_C", "A_NC"), `6m_C_vs_NC` = c("6m_C", "6m_NC"), NC_A_vs_6m = c("A_NC", "6m_NC"), C_A_vs_6m = c("A_C", "6m_C"))
+  receiver_indices: !r list(B_cells = c(1, 2, 3, 4, 5), CD4_T_cells = c(6, 7, 8, 9, 10, 11, 12, 13), CD8_T_cells = c(14, 15, 16, 17), GD_T_cells = c(18, 19), Dendritic_cells = c(22, 23), Monocytes = c(24, 25, 26), Other_cells = c(20, 21, 27))
+  pair_labels: !r list(A_C_vs_NC = "Acute - Chronic vs Non-Chronic", `6m_C_vs_NC` = "6 months - Chronic vs Non-Chronic", NC_A_vs_6m = "Non-Chronic - Acute vs 6 months", C_A_vs_6m = "Chronic - Acute vs 6 months")
+  filter_labels: !r list(all = "unfiltered", pfilt = "p-value filtered")
+  report_title_prefix: "Chikv"
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(message = FALSE, warning = FALSE, echo = FALSE)
-withr::with_dir(here::here(), { source("renv/activate.R") })
 
+library(baia.cellchat)
 library(Seurat)
 library(CellChat)
 library(rmdreportdeck)
 reportdeck_setup()
 knitr::opts_chunk$set(cache=F)
 
-analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
-input_var_dir <- paste0(analysis_root, "steps/", params$input_step, "/results/vars/")
-if (!dir.exists(input_var_dir))
-  stop("Input variable directory does not exist: ", input_var_dir)
-this_step_dir <- paste0(analysis_root, "steps/", params$this_step, "/")
-if (!dir.exists(this_step_dir))
-  stop("Current step directory does not exist: ", this_step_dir)
-
-pair_map <- list(
-  A_C_vs_NC    = c("A_NC",  "A_C"),
-  `6m_C_vs_NC` = c("6m_NC", "6m_C"),
-  NC_A_vs_6m   = c("A_NC",  "6m_NC"),
-  C_A_vs_6m    = c("A_C",   "6m_C")
-)
-if (!params$pair %in% names(pair_map)) stop("Unknown pair: ", params$pair)
+if (is.null(params$sfx) || !nzchar(params$sfx)) params$sfx <- params$filter_mode
+if (is.null(params$pair_definitions))
+  stop("Pass pair_definitions to rmarkdown::render().", call. = FALSE)
+if (!params$pair %in% names(params$pair_definitions)) stop("Unknown pair: ", params$pair)
 if (!params$sfx  %in% c("all", "pfilt")) stop("Unknown sfx: ", params$sfx)
+if (is.null(params$receiver_indices) || length(params$receiver_indices) == 0)
+  stop("Pass receiver_indices to rmarkdown::render().", call. = FALSE)
 
-conds  <- pair_map[[params$pair]]
+conds  <- params$pair_definitions[[params$pair]]
 nm1    <- conds[1]; nm2 <- conds[2]
 sfx    <- params$sfx
-thresh <- if (sfx == "pfilt") 0.05 else 1
+thresh <- if (sfx == "pfilt") params$pval_threshold else 1
 pfx    <- paste0(params$pair, ".", sfx)
 
-plots_outdir <- paste0(this_step_dir, "results/", params$pair, "/", sfx, "/plots/")
+plots_outdir <- file.path(params$output_dir, params$pair, sfx, "plots")
 dir.create(plots_outdir, recursive = TRUE, showWarnings = FALSE)
 
-idx <- list(
-  B_cells         = c(1,2,3,4,5),
-  CD4_T_cells     = c(6,7,8,9,10,11,12,13),
-  CD8_T_cells     = c(14,15,16,17),
-  GD_T_cells      = c(18,19),
-  Dendritic_cells = c(22,23),
-  Monocytes       = c(24,25,26),
-  Other_cells     = c(20,21,27)
-)
-
-.fig_counter <- 0L
-
-pretty_cell_group <- function(x) {
-  gsub("_", " ", x, fixed = TRUE)
-}
-
-safe_asset_suffix <- function(x) {
-  gsub("[^A-Za-z0-9_.-]+", "_", x)
-}
-
-write_tsv <- function(x, path) {
-  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-  write.table(x, file = path, sep = "\t", quote = FALSE, row.names = FALSE, na = "")
-  invisible(path)
-}
-
-matrix_to_long <- function(m, value_name = "value") {
-  out <- expand.grid(source = rownames(m), target = colnames(m), stringsAsFactors = FALSE)
-  out[[value_name]] <- as.vector(m)
-  out
-}
-
-pathway_matrix_df <- function(cc_obj, condition, pathway, receiver_group, receiver_idx) {
-  lr_names <- dimnames(cc_obj@net$prob)[[3]]
-  pw_map <- cc_obj@LR$LRsig[lr_names, "pathway_name"]
-  lr_idx <- which(pw_map == pathway)
-  prob <- cc_obj@netP$prob[, , pathway, drop = TRUE]
-  count <- if (length(lr_idx) == 0) prob * 0 else
-    apply(cc_obj@net$prob[, , lr_idx, drop = FALSE] > 0, c(1, 2), sum)
-  receiver_cells <- levels(cc_obj@idents)[receiver_idx]
-  df <- matrix_to_long(prob, value_name = "communication_probability")
-  df$lr_interaction_count <- as.vector(count)
-  df$condition <- condition
-  df$pathway <- pathway
-  df$receiver_group <- receiver_group
-  df$receiver_in_group <- df$target %in% receiver_cells
-  df[, c("condition", "pathway", "receiver_group", "receiver_in_group",
-         "source", "target", "lr_interaction_count", "communication_probability")]
-}
-
-report_href <- function(path) {
-  file.path("..", "results", params$pair, sfx, "plots", path)
-}
-
-h <- function(level, text) {
-  writeLines(c("", paste0(strrep("#", level), " ", text), ""))
-}
+idx <- params$receiver_indices
 ```
 
 # Goal
@@ -116,85 +58,15 @@ filter setting. Each panel shows the communication network for one pathway and o
 cell group, with sender and receiver cells arranged hierarchically.
 
 ```{r load_so}
-so <- readRDS(file = paste0(input_var_dir, params$input_rds))
-cc <- so@misc$cc[[sfx]]
+so <- readRDS(file = params$input_rds)
+cc <- so@misc$cellchat_filtered[[sfx]]
 ```
 
-```{r hierarchy_render, include=FALSE}
-hierarchy_items <- list()
-for (nm in c(nm1, nm2)) {
-  all_pathways <- cc[[nm]]@netP$pathways
-  outdir       <- file.path(plots_outdir, "hierarchy", nm)
-  dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
-  for (pathway in all_pathways) {
-    for (cg in names(idx)) {
-      fstem    <- paste0(nm, ".", sfx, ".", gsub(" ", "_", pathway), "_receiver_", cg)
-      png_path <- file.path(outdir, paste0(fstem, "_hierarchy.png"))
-      pdf_path <- file.path(outdir, paste0(fstem, "_hierarchy.pdf"))
-      tsv_path <- file.path(outdir, paste0(fstem, "_hierarchy.tsv"))
-
-      for (dev_fn in list(
-        list(fn = function(p) png(p, width = 900, height = 1200), path = png_path),
-        list(fn = function(p) pdf(p, width = 9, height = 12),     path = pdf_path)
-      )) {
-        dev_fn$fn(dev_fn$path)
-        netVisual_aggregate(cc[[nm]], signaling = pathway,
-          layout = "hierarchy", vertex.receiver = idx[[cg]], thresh = thresh,
-          vertex.weight = 5, show.legend = TRUE,
-          vertex.label.cex = 0.6, point.size = 0.3,
-          scale = TRUE, big.gap = 15, small.gap = 2)
-        title(paste0(nm, " (", sfx, "): ", pathway, " - ", cg))
-        invisible(dev.off())
-      }
-
-      write_tsv(pathway_matrix_df(cc[[nm]], nm, pathway, pretty_cell_group(cg), idx[[cg]]),
-                tsv_path)
-
-      hierarchy_items[[length(hierarchy_items) + 1]] <- list(
-        condition = nm,
-        pathway = pathway,
-        cell_group = cg,
-        cell_group_label = pretty_cell_group(cg),
-        suffix = safe_asset_suffix(paste(nm, pathway, cg, sep = ".")),
-        png = report_href(file.path("hierarchy", nm, basename(png_path))),
-        pdf = report_href(file.path("hierarchy", nm, basename(pdf_path))),
-        tsv = report_href(file.path("hierarchy", nm, basename(tsv_path))),
-        png_filename = basename(png_path),
-        pdf_filename = basename(pdf_path),
-        tsv_filename = basename(tsv_path)
-      )
-    }
-  }
-}
-```
-
-```{r hierarchy_display, results='asis'}
-current_condition <- NULL
-current_pathway <- NULL
-for (item in hierarchy_items) {
-  if (!identical(current_condition, item$condition)) {
-    current_condition <- item$condition
-    current_pathway <- NULL
-    h(1, item$condition)
-  }
-  if (!identical(current_pathway, item$pathway)) {
-    current_pathway <- item$pathway
-    h(2, item$pathway)
-  }
-  h(3, item$cell_group_label)
-  .fig_counter <- .fig_counter + 1L
-  fig_id <- paste0(.fig_counter, ".", pfx)
-
-  cat(as.character(report_asset_bar(
-    report_figure_name(fig_id, suffix = item$suffix),
-    report_download_link("Download PNG", item$png_filename, item$png),
-    report_download_link("Download PDF", item$pdf_filename, item$pdf),
-    report_download_link("Download TSV", item$tsv_filename, item$tsv)
-  )), "\n")
-  cat(paste0("**Fig ", .fig_counter, ". ", item$condition, " - ",
-             item$pathway, " - ", item$cell_group_label, "**\n\n"))
-  cat(paste0('<img src="', item$png, '" width="672" />', "\n\n"))
-}
+```{r hierarchy, results='asis'}
+baia.cellchat::cellchat_results_hierarchy_section(
+  cc = cc, nm1 = nm1, nm2 = nm2, sfx = sfx, thresh = thresh,
+  pfx = pfx, plots_outdir = plots_outdir, params = params, idx = idx
+)
 ```
 
 # Session info

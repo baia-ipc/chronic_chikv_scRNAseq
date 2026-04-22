@@ -17,21 +17,22 @@ SCRIPTS=analysis-1/steps/07.V.cellchat_results/scripts
 OUTDIR=$(realpath analysis-1/steps/07.V.cellchat_results/rundir)
 mkdir -p "$OUTDIR"
 
-# Create per-combination symlinks so knit2html produces distinctly named outputs
+# Copy Rmds to rundir with per-combination names so knit2html produces distinct outputs.
+# Copies (not symlinks) avoid broken-symlink failures in rmarkdown's post-knit processing.
 for rmd in "${RMDS[@]}"; do
   for pair in "${PAIRS[@]}"; do
     for sfx in "${SFXS[@]}"; do
-      ln -sf "${rmd}.Rmd" "${SCRIPTS}/${rmd}.${pair}.${sfx}.Rmd"
+      cp "${SCRIPTS}/${rmd}.Rmd" "${OUTDIR}/${rmd}.${pair}.${sfx}.Rmd"
     done
   done
 done
 
-# Remove symlinks on exit (success or failure)
+# Remove copies on exit (success or failure)
 cleanup() {
   for rmd in "${RMDS[@]}"; do
     for pair in "${PAIRS[@]}"; do
       for sfx in "${SFXS[@]}"; do
-        rm -f "${SCRIPTS}/${rmd}.${pair}.${sfx}.Rmd"
+        rm -f "${OUTDIR}/${rmd}.${pair}.${sfx}.Rmd"
       done
     done
   done
@@ -46,7 +47,7 @@ for rmd in "${RMDS[@]}"; do
     for sfx in "${SFXS[@]}"; do
       LOG="${OUTDIR}/${rmd}.${pair}.${sfx}.log"
       echo "$(date '+%F %T')  START  ${rmd}  pair=${pair}  sfx=${sfx}"
-      "$KNIT2HTML" "${SCRIPTS}/${rmd}.${pair}.${sfx}.Rmd" "pair=${pair}" "sfx=${sfx}" \
+      "$KNIT2HTML" "${OUTDIR}/${rmd}.${pair}.${sfx}.Rmd" "pair=${pair}" "sfx=${sfx}" "filter_mode=${sfx}" \
         > "$LOG" 2>&1 &
       pids+=($!)
       labels+=("${rmd}.${pair}.${sfx}")

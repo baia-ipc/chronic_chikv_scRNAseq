@@ -1,5 +1,5 @@
 ---
-title: "Chikv | Cellchat analysis"
+title: "Chikv | CellChat analysis"
 author: "Giorgio Gonnella"
 date: "`r Sys.Date()`"
 output:
@@ -11,18 +11,31 @@ params:
   input_rds: "integrated_so.rds"
   this_step: "07.P.compute_cellchat"
   output_rds: "so_w_cellchat.rds"
-  resume_rds: ""   # if non-empty, skip group CellChat and load this RDS instead
+  condition_outer_workers: 4
+  condition_ncores_per_job: 12
+  sample_outer_workers: 20
+  sample_ncores_per_job: 3
+  overwrite_cellchat_checkpoints: false
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(message=F, warning=F, echo=F)
-withr::with_dir(here::here(), { source("renv/activate.R") })
+project_root <- here::here()
+renv_activate <- file.path(project_root, "renv", "activate.R")
+source(renv_activate)
+
+worker_profile <- file.path(
+  project_root,
+  "analysis-1/steps/07.P.compute_cellchat/rundir/renv-worker-profile.R"
+)
+dir.create(dirname(worker_profile), recursive = TRUE, showWarnings = FALSE)
+writeLines(sprintf("source(%s)", deparse(renv_activate)), worker_profile)
+Sys.setenv(RENV_PROJECT = project_root, R_PROFILE_USER = worker_profile)
 
 library(Seurat)
-library(CellChat)
-library(future)
+library(baia.cellchat)
 
-options(future.globals.maxSize = 10 * 1024^3)
+options(future.globals.maxSize = 200 * 1024^3)
 
 analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
 
@@ -42,125 +55,27 @@ var_dir <- paste0(this_step_dir, "results/vars/")
 if (!dir.exists(var_dir)) {
   dir.create(var_dir, recursive = TRUE)
 }
+
+checkpoint_dir <- file.path(var_dir, "cellchat_checkpoints")
 ```
 
 ```{r load, echo=F}
-if (nchar(params$resume_rds) > 0) {
-  so <- readRDS(file = params$resume_rds)
-} else {
-  so <- readRDS(file = paste0(input_var_dir, params$input_rds))
-}
+so <- readRDS(file = paste0(input_var_dir, params$input_rds))
 Idents(so) <- "celltype.abbrev"
-resuming <- nchar(params$resume_rds) > 0
 ```
 
-# Cell proportions permutations test
+# CellChat computation
 
-Perform a permutation test to assess the differences in cell type proportions.
+CellChat objects are computed for each CHIKV condition and per sample. The reusable CellChat execution and derived-object construction are provided by `baia.cellchat`; this step keeps only CHIKV-specific condition and grouping configuration.
 
-```{r subset_so_by_timepoint, echo=TRUE}
-if (!resuming) {
-  so_A <- subset(so, TimePoint == "A")
-  so_6m <- subset(so, TimePoint == "6m")
-  so_A_NC <- subset(so_A, clinical_condition == "Non-Chronic")
-  so_6m_NC <- subset(so_6m, clinical_condition == "Non-Chronic")
-  so_A_C <- subset(so_A, clinical_condition == "Chronic")
-  so_6m_C <- subset(so_6m, clinical_condition == "Chronic")
-}
-```
-
-```{r init_misc}
-if (!resuming) so@misc$cellchat <- list()
-```
-
-```{r cellchat_function}
-run_cellchat <- function(so, group.by, ncores = NULL) {
-  if (is.null(ncores)) {
-    ncores <- max(1, min(8, future::availableCores() - 1))
-  }
-  cellchat <- createCellChat(object = GetAssayData(so, assay = "RNA",
-                                                   slot = "data"),
-                             meta   = so@meta.data,
-                             group.by = group.by)
-  cellchat@DB <- CellChatDB.human
-  cellchat <- subsetData(cellchat)
-
-  plan("multisession", workers = ncores)
-  cellchat <- identifyOverExpressedGenes(cellchat)
-  cellchat <- identifyOverExpressedInteractions(cellchat)
-  cellchat <- smoothData(cellchat, adj = PPI.human)
-
-  cellchat <- computeCommunProb(cellchat,
-                                raw.use         = TRUE,
-                                population.size = TRUE)
-  cellchat <- filterCommunication(cellchat, min.cells = 10)
-  cellchat <- computeCommunProbPathway(cellchat)
-  cellchat <- aggregateNet(cellchat)
-  cellchat <- netAnalysis_computeCentrality(cellchat, slot.name = "netP")
-
-  plan("sequential")
-  return(cellchat)
-}
-```
-
-## Acute
-
-```{r A_NC_cellchat, echo=TRUE}
-if (!resuming) so@misc$cellchat["A_NC"] <- run_cellchat(so_A_NC, group.by = "celltype.abbrev")
-```
-
-## 6 months
-
-```{r m6_NC_cellchat, echo=TRUE}
-if (!resuming) so@misc$cellchat["6m_NC"] <- run_cellchat(so_6m_NC, group.by = "celltype.abbrev")
-```
-
-## Non-Chronic
-
-```{r A_C_cellchat, echo=TRUE}
-if (!resuming) so@misc$cellchat["A_C"] <- run_cellchat(so_A_C, group.by = "celltype.abbrev")
-```
-
-## Chronic
-
-```{r m6_C_cellchat, echo=TRUE}
-if (!resuming) so@misc$cellchat["6m_C"] <- run_cellchat(so_6m_C, group.by = "celltype.abbrev")
-```
-
-## Per-sample CellChat objects (for rankNet statistical testing)
-
-```{r per_sample_cellchat, echo=TRUE}
-so@misc$cellchat_per_sample <- list()
-groups <- list(
-  A_NC  = list(tp = "A",  cc = "Non-Chronic"),
-  A_C   = list(tp = "A",  cc = "Chronic"),
-  `6m_NC` = list(tp = "6m", cc = "Non-Chronic"),
-  `6m_C`  = list(tp = "6m", cc = "Chronic")
+```{r cellchat_configuration, echo=TRUE}
+condition_definitions <- list(
+  A_NC = list(TimePoint = "A", clinical_condition = "Non-Chronic"),
+  A_C = list(TimePoint = "A", clinical_condition = "Chronic"),
+  `6m_NC` = list(TimePoint = "6m", clinical_condition = "Non-Chronic"),
+  `6m_C` = list(TimePoint = "6m", clinical_condition = "Chronic")
 )
-for (grp_name in names(groups)) {
-  g   <- groups[[grp_name]]
-  sub <- so[, so$TimePoint == g$tp & so$clinical_condition == g$cc]
-  samples <- sort(unique(sub$sample))
-  so@misc$cellchat_per_sample[[grp_name]] <- list()
-  for (s in samples) {
-    sub_s <- sub[, sub$sample == s]
-    # Drop unused factor levels (required by computeCommunProb)
-    sub_s$celltype.abbrev <- droplevels(sub_s$celltype.abbrev)
-    Idents(sub_s) <- "celltype.abbrev"
-    # Skip samples where no cell type has >= 10 cells
-    ct_counts <- table(sub_s$celltype.abbrev)
-    if (any(ct_counts >= 10)) {
-      so@misc$cellchat_per_sample[[grp_name]][[s]] <-
-        run_cellchat(sub_s, group.by = "celltype.abbrev")
-    }
-  }
-}
-```
 
-## Derived CellChat objects (all visualizations read from these)
-
-```{r derived_setup}
-# pair_map: defines which two conditions are compared per pair
 pair_map <- list(
   A_C_vs_NC    = c("A_NC",  "A_C"),
   `6m_C_vs_NC` = c("6m_NC", "6m_C"),
@@ -168,9 +83,7 @@ pair_map <- list(
   C_A_vs_6m    = c("A_C",   "6m_C")
 )
 
-cond_names <- c("A_NC", "A_C", "6m_NC", "6m_C")
-
-# Cell-type grouping vector (27 cell types -> 9 groups)
+# Cell-type grouping vector (27 cell types -> 9 groups).
 group.celltype <- c(
   rep("B cells",          5),
   rep("CD4+ T cells",     8),
@@ -182,124 +95,55 @@ group.celltype <- c(
   rep("Monocytes",        3),
   rep("Progenitor cells", 1)
 )
-
-# --- Filtering helpers ---
-rebuild_net <- function(cc, mask) {
-  cc@net$count  <- apply(mask, c(1, 2), sum)
-  prob_masked   <- cc@net$prob; prob_masked[!mask] <- 0
-  cc@net$weight <- apply(prob_masked, c(1, 2), sum)
-  lr_names <- dimnames(cc@net$pval)[[3]]
-  pw_map   <- cc@LR$LRsig[lr_names, "pathway_name"]
-  all_pw   <- cc@netP$pathways
-  prob_pw  <- array(0, dim = dim(cc@netP$prob), dimnames = dimnames(cc@netP$prob))
-  for (pw in all_pw) {
-    idx <- which(pw_map == pw)
-    if (length(idx) == 1)     prob_pw[, , pw] <- prob_masked[, , idx]
-    else if (length(idx) > 1) prob_pw[, , pw] <- apply(prob_masked[, , idx], c(1, 2), sum)
-  }
-  cc@netP$prob     <- prob_pw
-  cc@netP$pathways <- all_pw[apply(prob_pw > 0, 3, any)]
-  cc <- netAnalysis_computeCentrality(cc, slot.name = "netP")
-  cc
-}
-unfilter_cc <- function(cc) rebuild_net(cc, cc@net$prob > 0)
-filter_cc_by_pval <- function(cc, thr = 0.05) {
-  # Require prob > 0 AND pval <= thr (pval=0 for zero-prob interactions)
-  mask <- cc@net$pval <= thr & cc@net$prob > 0
-  mask[is.na(mask)] <- FALSE
-  rebuild_net(cc, mask)
-}
-
-merge_two <- function(cc1, cc2, nms) {
-  mergeCellChat(setNames(list(cc1, cc2), nms), add.names = nms)
-}
-
-mergeInteractions_inplace <- function(cc_in, grp) {
-  cc_g <- mergeInteractions(cc_in, grp)
-  cc_g@net$count  <- cc_g@net$count.merged
-  cc_g@net$weight <- cc_g@net$weight.merged
-  cc_g@net$count.merged  <- NULL
-  cc_g@net$weight.merged <- NULL
-  cc_g@idents <- factor(grp[as.integer(cc_in@idents)], levels = unique(grp))
-  cc_g
-}
 ```
 
-```{r derived_per_condition}
-# cc$all / cc$pfilt — filtered per-condition objects
-so@misc$cc <- list(all = list(), pfilt = list())
-for (nm in cond_names) {
-  so@misc$cc$all[[nm]]   <- unfilter_cc(so@misc$cellchat[[nm]])
-  so@misc$cc$pfilt[[nm]] <- filter_cc_by_pval(so@misc$cellchat[[nm]])
-}
+```{r condition_cellchat, echo=TRUE}
+so@misc$cellchat <- run_cellchat_for_conditions(
+  so = so,
+  condition_definitions = condition_definitions,
+  group.by = "celltype.abbrev",
+  ncores = params$condition_ncores_per_job,
+  future_strategy = "multicore",
+  outer_workers = params$condition_outer_workers,
+  outer_method = "psock",
+  checkpoint_dir = file.path(checkpoint_dir, "condition"),
+  overwrite = params$overwrite_cellchat_checkpoints
+)
 ```
 
-```{r derived_merged_pairs}
-# cc_merged$all / cc_merged$pfilt — merged pairs for comparison plots
-so@misc$cc_merged <- list(all = list(), pfilt = list())
-for (pair in names(pair_map)) {
-  nms <- pair_map[[pair]]
-  for (sfx in c("all", "pfilt")) {
-    so@misc$cc_merged[[sfx]][[pair]] <-
-      merge_two(so@misc$cc[[sfx]][[nms[1]]],
-                so@misc$cc[[sfx]][[nms[2]]], nms)
-  }
-}
+```{r per_sample_cellchat, echo=TRUE}
+so@misc$cellchat_per_sample <- run_cellchat_per_sample(
+  so = so,
+  condition_definitions = condition_definitions,
+  group.by = "celltype.abbrev",
+  sample.by = "sample",
+  ncores = params$sample_ncores_per_job,
+  future_strategy = "multicore",
+  outer_workers = params$sample_outer_workers,
+  outer_method = "psock",
+  checkpoint_dir = file.path(checkpoint_dir, "per_sample"),
+  overwrite = params$overwrite_cellchat_checkpoints
+)
 ```
 
-```{r derived_ranknet}
-# cc_ranknet_merged — per-sample merged objects for rankNet do.stat=TRUE
-# Samples are subset to the intersection of cell types so that all net$prob
-# arrays have the same dimensions, which rankNet(do.stat=TRUE) requires.
-so@misc$cc_ranknet_merged <- list()
-for (pair in names(pair_map)) {
-  nms <- pair_map[[pair]]
-  ps1 <- so@misc$cellchat_per_sample[[nms[1]]]
-  ps2 <- so@misc$cellchat_per_sample[[nms[2]]]
-  if (length(ps1) > 0 && length(ps2) > 0) {
-    all_ps   <- c(ps1, ps2)
-    ps_names <- c(names(ps1), names(ps2))
-    common_idents <- Reduce(intersect, lapply(all_ps, function(cc) levels(cc@idents)))
-    all_ps_sub <- lapply(all_ps, function(cc)
-      subsetCellChat(cc, idents.use = common_idents))
-    so@misc$cc_ranknet_merged[[pair]] <-
-      mergeCellChat(all_ps_sub, add.names = ps_names, cell.prefix = TRUE)
-  }
-}
-```
+## Derived CellChat objects
 
-```{r derived_grouped}
-# cc_grouped$all / cc_grouped$pfilt — cell-type-grouped per-condition objects
-so@misc$cc_grouped <- list(all = list(), pfilt = list())
-for (nm in cond_names) {
-  for (sfx in c("all", "pfilt")) {
-    so@misc$cc_grouped[[sfx]][[nm]] <-
-      mergeInteractions_inplace(so@misc$cc[[sfx]][[nm]], group.celltype)
-  }
-}
-```
+All report visualizations read from package-style derived structures in `so@misc`.
 
-```{r derived_grouped_merged}
-# cc_grouped_merged$all / cc_grouped_merged$pfilt — grouped merged pairs
-so@misc$cc_grouped_merged <- list(all = list(), pfilt = list())
-for (pair in names(pair_map)) {
-  nms <- pair_map[[pair]]
-  for (sfx in c("all", "pfilt")) {
-    so@misc$cc_grouped_merged[[sfx]][[pair]] <-
-      merge_two(so@misc$cc_grouped[[sfx]][[nms[1]]],
-                so@misc$cc_grouped[[sfx]][[nms[2]]], nms)
-  }
-}
+```{r derived_cellchat_structures, echo=TRUE}
+so <- add_cellchat_derived_structures(
+  so = so,
+  pair_definitions = pair_map,
+  group.celltype = group.celltype,
+  cellchat_slot = "cellchat",
+  per_sample_slot = "cellchat_per_sample"
+)
 ```
-
-## Saving data
 
 ```{r save, echo=TRUE}
-saveRDS(so, paste0(var_dir, params$output_rds))
-```
-
-## Session info
-
-```{r, echo=F}
-sessionInfo()
+output_rds_path <- paste0(var_dir, params$output_rds)
+if (file.exists(output_rds_path) || nzchar(Sys.readlink(output_rds_path))) {
+  unlink(output_rds_path)
+}
+saveRDS(so, file = output_rds_path)
 ```
