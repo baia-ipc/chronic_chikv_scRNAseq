@@ -1,4 +1,4 @@
-# CHIKV S5 scRNA-seq analysis
+# CHIKV scRNA-seq analysis
 
 This repository contains the single-cell RNA-seq analysis for our Chikungunya
 longitudinal study. The main comparisons are:
