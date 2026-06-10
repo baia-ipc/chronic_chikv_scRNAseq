@@ -20,6 +20,7 @@ withr::with_dir(here::here(), { source("renv/activate.R") })
 
 library(harmony)
 library(Seurat)
+library(baia.seurat.helpers)
 
 analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
 
@@ -40,10 +41,6 @@ dir.create(var_dir, showWarnings = FALSE, recursive = TRUE)
 
 samples_sheet <- here::here(params$samples_sheet)
 
-helpers_dir <- here::here("helpers/")
-source(paste0(helpers_dir, "merging_helpers.R"))
-source(paste0(helpers_dir, "clustering_helpers.R"))
-source(paste0(helpers_dir, "samples_sheet.R"))
 ```
 
 # Load Seurat Objects
@@ -51,8 +48,10 @@ source(paste0(helpers_dir, "samples_sheet.R"))
 ```{r read input data}
 samples_metadata <- read_samples_sheet(samples_sheet,
                                        params$sample_id_col)
-sampleIDs <- get_sample_IDs(samples_metadata,
-                            column=params$sample_id_col)
+sampleIDs <- baia.seurat.helpers::get_sample_IDs(
+  samples_metadata,
+  column=params$sample_id_col
+)
 
 so_list = list()
 for (sampleID in sampleIDs) {

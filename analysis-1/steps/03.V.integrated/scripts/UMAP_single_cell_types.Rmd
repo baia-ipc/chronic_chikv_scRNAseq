@@ -41,8 +41,6 @@ dir.create(plots_outdir, recursive = T, showWarnings = F)
 tables_outdir <- paste0(this_step_dir, "results/tables/")
 dir.create(tables_outdir, recursive = T, showWarnings = F)
 
-helpers_dir <- here::here("helpers/")
-source(paste0(helpers_dir, "combined_proportion_plot.R"))
 ```
 
 ```{r load, echo = FALSE}
@@ -65,9 +63,27 @@ Visualize the Harmony-integrated UMAP embedding with one SingleR fine cell type 
 Each panel displays all cells in grey with the cells of a given type overlaid in dark blue,
 allowing visual confirmation of each cell type's spatial distribution on the UMAP.
 
-# UMAP plots
+# UMAP plot colored by cell type
 
-UMAP highlighting single cell types (singleR fine labels)
+```{r umap_by_celltype, fig.width = 12, fig.height = 6, echo = FALSE, results = "asis"}
+plot_obj <- DimPlot(object = so, reduction = "umapharm",
+                    group.by = "pruned.labels_singleR_fine",
+                    cols = so@misc$colors$celltypes, label = FALSE, repel = TRUE) +
+  ggtitle("UMAP plot, colored by cell type")
+bundle <- report_plot_bundle(
+  plot_obj,
+  block_prefix = "V03S.00",
+  suffix = "umap_by_celltype",
+  width = 12,
+  height = 6,
+  plot_dir = plots_outdir,
+  data_dir = tables_outdir
+)
+cat(as.character(report_bundle_asset_bar(bundle$stem, bundle)), "\n")
+print(plot_obj)
+```
+
+# UMAP highlighting single cell types
 
 ```{r single_cell_types_umap, fig.width = 12, fig.height = 6, echo = FALSE, results = "asis"}
 cell_types <- sort(unique(so$pruned.labels_singleR_fine))
@@ -80,8 +96,6 @@ for (i in seq_along(cell_types)) {
         cells.highlight = highl, cols.highlight = "darkblue",
         cols = "grey") +
     ggtitle(ct) + theme(legend.position = "none")
-  plot_data <- umap_df
-  plot_data$highlighted <- plot_data$pruned.labels_singleR_fine == ct
   ct_slug <- tolower(gsub("(^-+|-+$)", "", gsub("[^A-Za-z0-9]+", "-", ct)))
   bundle <- report_plot_bundle(
     plt,
@@ -89,13 +103,12 @@ for (i in seq_along(cell_types)) {
     suffix = ct_slug,
     width = 12,
     height = 6,
-    data = plot_data,
     plot_dir = plots_outdir,
     data_dir = tables_outdir
   )
   items[[i]] <- report_item_panel(
-    title = paste0(ct, " (", length(highl), " cells) (Fig/Tab V03S.", sprintf("%02d", i), ")"),
-    asset_bar = report_bundle_asset_bar(bundle$stem, bundle, tsv_label = "Download TSV"),
+    title = paste0(ct, " (", length(highl), " cells) (Fig V03S.", sprintf("%02d", i), ")"),
+    asset_bar = report_bundle_asset_bar(bundle$stem, bundle),
     report_item_plot(plt, width = 12, height = 6)
   )
 }

@@ -27,6 +27,7 @@ library(parallel)
 library(robustbase)
 library(viridis)
 library(rmdreportdeck)
+library(baia.seurat.helpers)
 reportdeck_setup()
 knitr::opts_chunk$set(cache=F)
 
@@ -50,8 +51,6 @@ if (!dir.exists(this_step_dir)) {
 plots_dir <- paste0(this_step_dir, "results/plots/")
 dir.create(plots_dir, showWarnings = F, recursive = T)
 
-helpers_dir <- here::here("helpers/")
-source(paste0(helpers_dir, "qc_helpers.R"))
 ```
 
 # Goal

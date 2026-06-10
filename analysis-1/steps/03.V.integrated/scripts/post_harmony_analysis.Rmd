@@ -41,8 +41,6 @@ dir.create(plots_outdir, recursive = T, showWarnings = F)
 tables_outdir <- paste0(this_step_dir, "results/tables/")
 dir.create(tables_outdir, recursive = T, showWarnings = F)
 
-helpers_dir <- here::here("helpers/")
-source(paste0(helpers_dir, "combined_proportion_plot.R"))
 ```
 
 ```{r load, echo = FALSE}

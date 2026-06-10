@@ -25,6 +25,7 @@ library(ggbeeswarm)
 library(ggExtra)
 library(matrixStats)
 library(rmdreportdeck)
+library(baia.seurat.helpers)
 reportdeck_setup()
 knitr::opts_chunk$set(cache=F)
 
@@ -42,9 +43,6 @@ if (!dir.exists(this_step_dir)) {
   stop("Current step directory does not exist: ", this_step_dir)
 }
 
-helpers_dir <- here::here("helpers/")
-source(paste0(helpers_dir, "samples_sheet.R"))
-source(paste0(helpers_dir, "qc_helpers.R"))
 ```
 
 # Goal
@@ -56,8 +54,12 @@ per-sample and merged QC plots for the cleaned dataset.
 # Load Seurat objects
 
 ```{r read input data}
-sampleIDs <- get_sample_IDs(samples_sheet,
-                            column=params$sample_id_col)
+samples_metadata <- read_samples_sheet(samples_sheet,
+                                       column=params$sample_id_col)
+sampleIDs <- baia.seurat.helpers::get_sample_IDs(
+  samples_metadata,
+  column=params$sample_id_col
+)
 
 so_list = list()
 for (sampleID in sampleIDs) {

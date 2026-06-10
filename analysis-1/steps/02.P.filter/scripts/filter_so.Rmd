@@ -27,6 +27,7 @@ library(robustbase)
 library(viridis)
 library(SingleR)
 library(celldex)
+library(baia.seurat.helpers)
 
 if (is.na(params$sample)) {
   stop("Please provide a sample name")
@@ -48,8 +49,6 @@ if (!dir.exists(this_step_dir)) {
 var_dir <- paste0(this_step_dir, "results/vars/")
 dir.create(var_dir, showWarnings = F, recursive = T)
 
-helpers_dir <- here::here("helpers/")
-source(paste0(helpers_dir, "qc_helpers.R"))
 ```
 
 # Load Seurat object
