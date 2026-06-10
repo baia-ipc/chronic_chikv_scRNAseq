@@ -1,5 +1,5 @@
 ---
-title: "Chikv | Results after Harmony integration | Cell proportion analyses"
+title: "CHIKV | Cell proportion analyses"
 author: "Giorgio Gonnella"
 date: "`r Sys.Date()`"
 output:
@@ -13,149 +13,192 @@ params:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(message=F, warning=F, echo=F)
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, echo = FALSE)
 withr::with_dir(here::here(), { source("renv/activate.R") })
 
 library(Seurat)
-library(viridis)
 library(ggplot2)
-library(RColorBrewer)
+library(knitr)
 library(rmdreportdeck)
+library(baia.ext.cellprop.plots)
+
 reportdeck_setup()
-knitr::opts_chunk$set(cache=F)
+knitr::opts_chunk$set(cache = FALSE)
 
-analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
+analysis_root <- here::here(paste0("analysis-", params$analysis))
+input_var_dir <- file.path(analysis_root, "steps", params$input_step, "results", "vars")
+this_step_dir <- file.path(analysis_root, "steps", params$step)
+plots_outdir <- file.path(this_step_dir, "results", "plots")
+tables_outdir <- file.path(this_step_dir, "results", "tables")
 
-input_step_dir <- paste0(analysis_root, "steps/", params$input_step, "/")
-input_var_dir <- paste0(input_step_dir, "results/vars/")
 if (!dir.exists(input_var_dir)) {
-  stop("Input variable directory does not exist: ", input_var_dir)
+  stop("Input variable directory does not exist: ", input_var_dir, call. = FALSE)
 }
+dir.create(plots_outdir, recursive = TRUE, showWarnings = FALSE)
+dir.create(tables_outdir, recursive = TRUE, showWarnings = FALSE)
 
-this_step_dir <- paste0(analysis_root, "steps/", params$step, "/")
-if (!dir.exists(this_step_dir)) {
-  stop("Current step directory does not exist: ", this_step_dir)
-}
-
-plots_outdir <- paste0(this_step_dir, "results/plots/")
-dir.create(plots_outdir, recursive = T, showWarnings = F)
-tables_outdir <- paste0(this_step_dir, "results/tables/")
-dir.create(tables_outdir, recursive = T, showWarnings = F)
-
-helpers_dir <- here::here("helpers/")
-source(paste0(helpers_dir, "combined_proportion_plot.R"))
 ```
 
-```{r load, echo = FALSE}
-so <- readRDS(paste0(input_var_dir, params$input_rds))
-```
-
-```{r subset_so_by_timepoint, echo=FALSE}
-subset_so <- list()
-subset_so[["A"]] <- subset(so, TimePoint == "A")
-subset_so[["6m"]] <- subset(so, TimePoint == "6m")
-subset_so[["NC"]] <- subset(so, clinical_condition == "Non-Chronic")
-subset_so[["C"]] <- subset(so, clinical_condition == "Chronic")
+```{r load}
+so <- readRDS(file.path(input_var_dir, params$input_rds))
 ```
 
 # Goal
 
-Test and visualize cell-type composition differences across conditions and timepoints.
-Reports statistical tests comparing Non-Chronic vs Chronic and acute (A) vs 6-month (6m)
-groups, with plots and tables summarising proportion shifts per cell type.
+Test and visualize cell-type composition differences across conditions and
+timepoints. Each report item contains an aligned proportion/test plot and the
+canonical permutation-test table.
 
-# Proportion test for A and 6m timepoints
+```{r project_configuration}
+col_red  <- "#DC143C"  # Chronic, Acute
+col_blue <- "#4169E1"  # Non-Chronic, 6-Months
 
-Non-Chronic vs Chronic
+comparison_groups_tp <- list(
+  list(
+    key = "A",
+    data = subset(so, TimePoint == "A"),
+    condition_col = "clinical_condition",
+    condition_title = "Clinical Condition",
+    condition_palette = c("Non-Chronic" = col_blue, "Chronic" = col_red)
+  ),
+  list(
+    key = "6m",
+    data = subset(so, TimePoint == "6m"),
+    condition_col = "clinical_condition",
+    condition_title = "Clinical Condition",
+    condition_palette = c("Non-Chronic" = col_blue, "Chronic" = col_red)
+  )
+)
 
-```{r tp_proportion_test_results, echo=FALSE, fig.width=14, fig.height=8}
-for (cs in c("all", names(so@misc$cell_subsets))) {
-  for (tp in c("A", "6m")) {
-    sso <- subset_so[[tp]]
-    if (cs %in% names(so@misc$cell_subsets)) {
-      sso <- subset(sso, cell_group %in% so@misc$cell_subsets[[cs]])
-    }
-    title = paste0("Proportion test in ", tp, " timepoint, NC vs C, subsets of: ", cs)
-    plt <- grouped_combined_permutation_test_plot(
-                sso, so@misc$proptest[[tp]][[cs]],
-                "celltype.abbrev", "cell_group",
-                "clinical_condition", "Clinical Condition",
-                so@misc$cond_cols,
-                so@misc$colors$celltype_groups_bkg,
-                barplot_log_scale = T)
-    plt <- plt + ggtitle(title) + theme(plot.title = element_text(hjust = 0.5, size = 16))
-    fname <- paste0(plots_outdir, tp, ".singleR_proportion_test.", cs ,".svg")
-    ggsave(fname, plot = plt, device = "svg")
-    print(plt)
+comparison_groups_cc <- list(
+  list(
+    key = "C",
+    data = subset(so, clinical_condition == "Chronic"),
+    condition_col = "TimePoint",
+    condition_title = "Timepoint",
+    condition_palette = c("A" = col_red, "6m" = col_blue)
+  ),
+  list(
+    key = "NC",
+    data = subset(so, clinical_condition == "Non-Chronic"),
+    condition_col = "TimePoint",
+    condition_title = "Timepoint",
+    condition_palette = c("A" = col_red, "6m" = col_blue)
+  )
+)
+
+cell_group_order <- sort(unique(as.character(so@meta.data$cell_group)))
+cell_group_palette <- so@misc$colors$celltype_groups_bkg
+cell_group_palette <- cell_group_palette[intersect(cell_group_order, names(cell_group_palette))]
+```
+
+```{r helper_functions}
+item_title <- function(group, subset_name) {
+  switch(
+    group$key,
+    A    = paste0("A timepoint, NC vs C | subsets of: ", subset_name),
+    `6m` = paste0("6M timepoint, NC vs C | subsets of: ", subset_name),
+    C    = paste0("C condition, A vs 6M | subsets of: ", subset_name),
+    NC   = paste0("NC condition, A vs 6M | subsets of: ", subset_name),
+    paste(group$key, "| subsets of:", subset_name)
+  )
+}
+
+make_item_fn <- function(group) {
+  function(subset_data, subset_name, test) {
+    build_cellprop_report_item(
+      seurat_obj    = subset_data,
+      test_result   = test,
+      title         = item_title(group, subset_name),
+      filename_stub = paste(group$key, "singleR_proportion_test", subset_name, sep = "."),
+      data_schema   = list(
+        sample    = "sample",
+        condition = group$condition_col,
+        celltype  = "celltype.abbrev",
+        group     = "cell_group"
+      ),
+      palette = list(
+        condition = group$condition_palette,
+        group     = cell_group_palette
+      ),
+      labels = list(
+        color        = group$condition_title,
+        significance = "Significance"
+      ),
+      layout = list(
+        group_background     = TRUE,
+        proportion_log_scale = TRUE
+      ),
+      plot_args = list(
+        modifiers = list(
+          combined = list(
+            ggplot2::theme(plot.title = ggplot2::element_text(hjust = 0.5, size = 16))
+          )
+        )
+      )
+    )
   }
 }
 ```
 
-```{r tp_proportion_test_results_table, echo=FALSE, results='asis'}
-for (cs in c("all", names(so@misc$cell_subsets))) {
-  for (tp in c("A", "6m")) {
-    sso <- subset_so[[tp]]
-    if (cs %in% names(so@misc$cell_subsets)) {
-      sso <- subset(sso, cell_group %in% so@misc$cell_subsets[[cs]])
-    }
-    title = paste0("Proportion test in ", tp, " timepoint, NC vs C, subsets of: ", cs)
-    print(title)
-    results <- so@misc$proptest[[tp]][[cs]]@results$permutation
-    write.table(results,
-      file = paste0(tables_outdir, tp, ".singleR_proportion_test.", cs, ".tsv"),
-      sep = "\t", row.names = F)
-    print(knitr::kable(results))
-  }
-}
+# Proportion test for A timepoint: Non-Chronic vs Chronic
+
+```{r A_results, results='asis'}
+emit_cellprop_group_section(
+  seurat_obj      = comparison_groups_tp[[1]]$data,
+  cell_subsets    = so@misc$cell_subsets,
+  test_results    = so@misc$proptest[["A"]],
+  build_item_fn   = make_item_fn(comparison_groups_tp[[1]]),
+  plots_dir       = plots_outdir,
+  tables_dir      = tables_outdir,
+  cell_group_order = cell_group_order
+)
 ```
 
-# Proportion test for NC and C conditions
+# Proportion test for 6M timepoint: Non-Chronic vs Chronic
 
-Acute vs 6 months
-
-```{r cc_proportion_test_results, echo=FALSE, fig.width=14, fig.height=8}
-for (cs in c("all", names(so@misc$cell_subsets))) {
-  for (cc in c("NC", "C")) {
-    sso <- subset_so[[cc]]
-    if (cs %in% names(so@misc$cell_subsets)) {
-      sso <- subset(sso, cell_group %in% so@misc$cell_subsets[[cs]])
-    }
-    title = paste0("Proportions test in ", cc, ", A vs 6M, subsets of: ", cs)
-    plt <- grouped_combined_permutation_test_plot(
-                sso, so@misc$proptest[[cc]][[cs]],
-                "celltype.abbrev", "cell_group",
-                "TimePoint", "Timepoint",
-                so@misc$cond_cols,
-                so@misc$colors$celltype_groups_bkg,
-                barplot_log_scale = T)
-    plt <- plt + ggtitle(title) + theme(plot.title = element_text(hjust = 0.5, size = 16))
-    fname <- paste0(plots_outdir, cc, ".singleR_proportion_test.", cs ,".svg")
-    ggsave(fname, plot = plt, device = "svg")
-    print(plt)
-  }
-}
+```{r sixm_results, results='asis'}
+emit_cellprop_group_section(
+  seurat_obj      = comparison_groups_tp[[2]]$data,
+  cell_subsets    = so@misc$cell_subsets,
+  test_results    = so@misc$proptest[["6m"]],
+  build_item_fn   = make_item_fn(comparison_groups_tp[[2]]),
+  plots_dir       = plots_outdir,
+  tables_dir      = tables_outdir,
+  cell_group_order = cell_group_order
+)
 ```
 
-```{r cc_proportion_test_table, echo=FALSE, results='asis'}
-for (cs in c("all", names(so@misc$cell_subsets))) {
-  for (cc in c("NC", "C")) {
-    sso <- subset_so[[cc]]
-    if (cs %in% names(so@misc$cell_subsets)) {
-      sso <- subset(sso, cell_group %in% so@misc$cell_subsets[[cs]])
-    }
-    title = paste0("Proportions test in ", cc, ", A vs 6M, subsets of: ", cs)
-    print(title)
-    results <- so@misc$proptest[[cc]][[cs]]@results$permutation
-    write.table(results,
-      file = paste0(tables_outdir, cc, ".singleR_proportion_test.", cs, ".tsv"),
-      sep = "\t", row.names = F)
-    print(knitr::kable(results))
-  }
-}
+# Proportion test for C condition: Acute vs 6-Months
+
+```{r C_results, results='asis'}
+emit_cellprop_group_section(
+  seurat_obj      = comparison_groups_cc[[1]]$data,
+  cell_subsets    = so@misc$cell_subsets,
+  test_results    = so@misc$proptest[["C"]],
+  build_item_fn   = make_item_fn(comparison_groups_cc[[1]]),
+  plots_dir       = plots_outdir,
+  tables_dir      = tables_outdir,
+  cell_group_order = cell_group_order
+)
+```
+
+# Proportion test for NC condition: Acute vs 6-Months
+
+```{r NC_results, results='asis'}
+emit_cellprop_group_section(
+  seurat_obj      = comparison_groups_cc[[2]]$data,
+  cell_subsets    = so@misc$cell_subsets,
+  test_results    = so@misc$proptest[["NC"]],
+  build_item_fn   = make_item_fn(comparison_groups_cc[[2]]),
+  plots_dir       = plots_outdir,
+  tables_dir      = tables_outdir,
+  cell_group_order = cell_group_order
+)
 ```
 
 # Session info
 
-```{r, echo=F}
+```{r session_info}
 sessionInfo()
 ```

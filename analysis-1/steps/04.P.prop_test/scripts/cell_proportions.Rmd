@@ -1,5 +1,5 @@
 ---
-title: "Chikv | Cell proportion tests"
+title: "CHIKV | Cell proportion tests"
 author: "Giorgio Gonnella"
 date: "`r Sys.Date()`"
 output:
@@ -11,161 +11,103 @@ params:
   input_rds: "integrated_so.rds"
   this_step: "04.P.prop_test"
   output_rds: "so_w_prop.rds"
+  n_permutations: 1000
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(message=F, warning=F, echo=F)
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, echo = FALSE)
 withr::with_dir(here::here(), { source("renv/activate.R") })
 
 library(Seurat)
-library(scProportionTest)
+library(baia.ext.cellprop.plots)
 
-analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
-
-input_step_dir <- paste0(analysis_root, "steps/", params$input_step, "/")
-input_var_dir <- paste0(input_step_dir, "results/vars/")
+analysis_root <- here::here(paste0("analysis-", params$analysis))
+input_var_dir <- file.path(analysis_root, "steps", params$input_step, "results", "vars")
+this_step_dir <- file.path(analysis_root, "steps", params$this_step)
+var_dir <- file.path(this_step_dir, "results", "vars")
 
 if (!dir.exists(input_var_dir)) {
-  stop("Input variable directory does not exist: ", input_var_dir)
+  stop("Input variable directory does not exist: ", input_var_dir, call. = FALSE)
 }
-
-this_step_dir <- paste0(analysis_root, "steps/", params$this_step, "/")
-if (!dir.exists(this_step_dir)) {
-  stop("Current step directory does not exist: ", this_step_dir)
-}
-
-var_dir <- paste0(this_step_dir, "results/vars/")
-if (!dir.exists(var_dir)) {
-  stop("Variable directory does not exist: ", var_dir)
-}
+dir.create(var_dir, recursive = TRUE, showWarnings = FALSE)
 ```
 
-```{r load, echo=F}
-so <- readRDS(file = paste0(input_var_dir, params$input_rds))
+```{r load}
+so <- readRDS(file.path(input_var_dir, params$input_rds))
 ```
 
-# Cell proportions permutations test
+# Cell proportion permutation tests
 
-Perform a permutation test to assess the differences in cell type proportions.
+The upstream integrated object is split into project-defined comparison sets.
+Each comparison is tested for all cell types and for configured broad cell-type
+subsets.
 
-```{r subset_so_by_timepoint, echo=TRUE}
-so_A <- subset(so, TimePoint == "A")
-so_6m <- subset(so, TimePoint == "6m")
-so_NC <- subset(so, clinical_condition == "Non-Chronic")
-so_C <- subset(so, clinical_condition == "Chronic")
+```{r project_configuration, echo=TRUE}
+cell_subsets <- list(
+  B = c("B cells"),
+  CD4 = c("CD4+ T cells"),
+  CD8 = c("CD8+ T cells"),
+  T = c("CD4+ T cells", "CD8+ T cells", "CD4-/CD8- T cells"),
+  Dendritic = c("Dendritic cells"),
+  Monocytes = c("Monocytes")
+)
+
+comparison_sets <- list(
+  A = list(
+    data = subset(so, TimePoint == "A"),
+    cluster_identity = "celltype.abbrev",
+    sample_identity = "clinical_condition",
+    sample_1 = "Non-Chronic",
+    sample_2 = "Chronic"
+  ),
+  `6m` = list(
+    data = subset(so, TimePoint == "6m"),
+    cluster_identity = "celltype.abbrev",
+    sample_identity = "clinical_condition",
+    sample_1 = "Non-Chronic",
+    sample_2 = "Chronic"
+  ),
+  NC = list(
+    data = subset(so, clinical_condition == "Non-Chronic"),
+    cluster_identity = "celltype.abbrev",
+    sample_identity = "TimePoint",
+    sample_1 = "A",
+    sample_2 = "6m"
+  ),
+  C = list(
+    data = subset(so, clinical_condition == "Chronic"),
+    cluster_identity = "celltype.abbrev",
+    sample_identity = "TimePoint",
+    sample_1 = "A",
+    sample_2 = "6m"
+  )
+)
 ```
 
-```{r init_misc}
-so@misc$proptest <- list()
-so@misc$proptest[["A"]] <- list()
-so@misc$proptest[["6m"]] <- list()
-so@misc$proptest[["NC"]] <- list()
-so@misc$proptest[["C"]] <- list()
-```
+```{r run_tests, echo=TRUE}
+so@misc$cell_subsets <- cell_subsets
+so@misc$proptest <- lapply(comparison_sets, function(definition) {
+  result <- list(all = run_cellprop_permutation(
+    definition$data, definition, n_permutations = params$n_permutations))
 
-```{r init_cell_subsets}
-so@misc$cell_subsets = list()
-so@misc$cell_subsets[["B"]] <- c("B cells")
-so@misc$cell_subsets[["CD4"]] <- c("CD4+ T cells")
-so@misc$cell_subsets[["CD8"]] <- c("CD8+ T cells")
-so@misc$cell_subsets[["T"]] <- c("CD4+ T cells", "CD8+ T cells",
-                                 "CD4-/CD8- T cells")
-so@misc$cell_subsets[["Dendritic"]] <- c("Dendritic cells")
-so@misc$cell_subsets[["Monocytes"]] <- c("Monocytes")
-```
+  for (subset_name in names(cell_subsets)) {
+    subset_obj <- subset_cellprop_data(definition$data, subset_name, cell_subsets)
+    result[[subset_name]] <- run_cellprop_permutation(
+      subset_obj, definition, n_permutations = params$n_permutations)
+  }
 
-## Acute: NC vs C
-
-```{r A_cell_prop_test, echo=TRUE}
-so@misc$proptest[["A"]][["all"]] <- permutation_test(sc_utils(so_A),
-                       cluster_identity = "celltype.abbrev",
-                       sample_1 = "Non-Chronic", sample_2 = "Chronic",
-                       sample_identity = "clinical_condition",
-                       n_permutations = 1000)
-```
-
-```{r A_subsets_cell_proptest, echo=TRUE}
-for (cell_subset in names(so@misc$cell_subsets)) {
-  so_subset <- subset(so_A, cell_group %in% so@misc$cell_subsets[[cell_subset]])
-  so@misc$proptest[["A"]][[cell_subset]] <- permutation_test(sc_utils(so_subset),
-                       cluster_identity = "celltype.abbrev",
-                       sample_1 = "Non-Chronic", sample_2 = "Chronic",
-                       sample_identity = "clinical_condition",
-                       n_permutations = 1000)
-}
-```
-
-## 6 months: NC vs C
-
-```{r m6_cell_prop_test, echo=TRUE}
-so@misc$proptest[["6m"]][["all"]] <- permutation_test(sc_utils(so_6m),
-                       cluster_identity = "celltype.abbrev",
-                       sample_1 = "Non-Chronic", sample_2 = "Chronic",
-                       sample_identity = "clinical_condition",
-                       n_permutations = 1000)
-```
-
-```{r m6_subsets_cell_proptest, echo=TRUE}
-for (cell_subset in names(so@misc$cell_subsets)) {
-  so_subset <- subset(so_6m, cell_group %in% so@misc$cell_subsets[[cell_subset]])
-  so@misc$proptest[["6m"]][[cell_subset]] <- permutation_test(sc_utils(so_subset),
-                       cluster_identity = "celltype.abbrev",
-                       sample_1 = "Non-Chronic", sample_2 = "Chronic",
-                       sample_identity = "clinical_condition",
-                       n_permutations = 1000)
-}
-```
-
-## Non-Chronic: Acute vs 6 months
-
-```{r NC_cell_prop_test, echo=TRUE}
-so@misc$proptest[["NC"]][["all"]] <- permutation_test(sc_utils(so_NC),
-                       cluster_identity = "celltype.abbrev",
-                       sample_1 = "A", sample_2 = "6m",
-                       sample_identity = "TimePoint",
-                       n_permutations = 1000)
-```
-
-```{r NC_subsets_cell_proptest, echo=TRUE}
-for (cell_subset in names(so@misc$cell_subsets)) {
-  so_subset <- subset(so_NC, cell_group %in% so@misc$cell_subsets[[cell_subset]])
-  so@misc$proptest[["NC"]][[cell_subset]] <- permutation_test(sc_utils(so_subset),
-                       cluster_identity = "celltype.abbrev",
-                       sample_1 = "A", sample_2 = "6m",
-                       sample_identity = "TimePoint",
-                       n_permutations = 1000)
-}
-```
-
-## Chronic: Acute vs 6 months
-
-```{r C_cell_prop_test, echo=TRUE}
-so@misc$proptest[["C"]][["all"]] <- permutation_test(sc_utils(so_C),
-                       cluster_identity = "celltype.abbrev",
-                       sample_1 = "A", sample_2 = "6m",
-                       sample_identity = "TimePoint",
-                       n_permutations = 1000)
-```
-
-```{r C_subsets_cell_proptest, echo=TRUE}
-for (cell_subset in names(so@misc$cell_subsets)) {
-  so_subset <- subset(so_C, cell_group %in% so@misc$cell_subsets[[cell_subset]])
-  so@misc$proptest[["C"]][[cell_subset]] <- permutation_test(sc_utils(so_subset),
-                       cluster_identity = "celltype.abbrev",
-                       sample_1 = "A", sample_2 = "6m",
-                       sample_identity = "TimePoint",
-                       n_permutations = 1000)
-}
+  result
+})
 ```
 
 ## Saving data
 
 ```{r save, echo=TRUE}
-saveRDS(so, paste0(var_dir, params$output_rds))
+saveRDS(so, file.path(var_dir, params$output_rds))
 ```
 
 ## Session info
 
-```{r, echo=F}
+```{r session_info}
 sessionInfo()
 ```
