@@ -7,6 +7,9 @@ Encoding: UTF-8
 Imports:
     baia.cellchat,
     baia.ext.cellprop.plots,
+    baia.pathway.analysis,
+    baia.pseudobulk.deseq,
+    baia.seurat.helpers,
     base64enc,
     CellChat,
     celldex,
