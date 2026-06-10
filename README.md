@@ -1,7 +1,7 @@
 # CHIKV S5 scRNA-seq analysis
 
 This repository contains the single-cell RNA-seq analysis for our Chikungunya
-project. The main comparisons are:
+longitudinal study. The main comparisons are:
 
 - chronic vs non-chronic participants
 - acute vs 6-month samples
