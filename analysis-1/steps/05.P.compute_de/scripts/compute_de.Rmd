@@ -10,16 +10,18 @@ params:
   step: "05.P.compute_de"
   input_step: "03.P.integration"
   input_rds: "integrated_so.rds"
+  output_rds: "so_w_deseq.rds"
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(message=F, warning=F, echo=T)
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, echo = TRUE, cache = FALSE)
 withr::with_dir(here::here(), { source("renv/activate.R") })
 
 library(Seurat)
+library(baia.pseudobulk.deseq)
 library(dplyr)
 
-analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
+analysis_root <- here::here(paste0("analysis-", params$analysis, "/"))
 
 input_step_dir <- paste0(analysis_root, "steps/", params$input_step, "/")
 input_var_dir <- paste0(input_step_dir, "results/vars/")
@@ -28,15 +30,10 @@ if (!dir.exists(input_var_dir)) {
 }
 
 this_step_dir <- paste0(analysis_root, "steps/", params$step, "/")
-if (!dir.exists(this_step_dir)) {
-  stop("Current step directory does not exist: ", this_step_dir)
-}
+dir.create(this_step_dir, showWarnings = FALSE, recursive = TRUE)
 
 var_dir <- paste0(this_step_dir, "results/vars/")
 dir.create(var_dir, showWarnings = FALSE, recursive = TRUE)
-
-helpers_dir <- here::here("helpers/")
-source(paste0(helpers_dir, "de_helpers.R"))
 ```
 
 ```{r load_input_data}
@@ -65,34 +62,43 @@ for (n in names(so@misc$de)) {
 ```
 
 ```{r select_genes}
-so@misc$de_selgenes <- select_genes(so, verbose=T)
+so@misc$de_selgenes <- select_genes(so, verbose = TRUE)
 ```
 
 ```{r prepare_pseudobulk_data}
-pseudo = list()
-cluster_names = list()
-freqs = list()
+pseudo <- list()
+cluster_names <- list()
+freqs <- list()
 clusters_col <- "celltype"
+
 for (tp in c("A", "M6")) {
-  pseudo[[tp]] <- AggregateExpression(subset_so[[tp]],
-                    assays = "RNA", return.seurat = TRUE,
-                    group.by = c("clinical_condition", "sample", clusters_col))
+  pseudo[[tp]] <- AggregateExpression(
+    subset_so[[tp]],
+    assays = "RNA",
+    return.seurat = TRUE,
+    group.by = c("clinical_condition", "sample", clusters_col)
+  )
   clusters_data <- pseudo[[tp]]@meta.data[[clusters_col]]
-  pseudo[[tp]]$cond.clusters <-
-    paste0(pseudo[[tp]]$clinical_condition, "_", clusters_data)
+  pseudo[[tp]]$cond.clusters <- paste0(
+    pseudo[[tp]]$clinical_condition, "_", clusters_data
+  )
+  Idents(pseudo[[tp]]) <- "cond.clusters"
+  cluster_names[[tp]] <- unique(as.character(clusters_data))
+  freqs[[tp]] <- table(Idents(pseudo[[tp]]))
 }
+
 for (cc in c("NC", "C")) {
-  pseudo[[cc]] <- AggregateExpression(subset_so[[cc]],
-                    assays = "RNA", return.seurat = TRUE,
-                    group.by = c("timepoint", "sample", clusters_col))
+  pseudo[[cc]] <- AggregateExpression(
+    subset_so[[cc]],
+    assays = "RNA",
+    return.seurat = TRUE,
+    group.by = c("timepoint", "sample", clusters_col)
+  )
   clusters_data <- pseudo[[cc]]@meta.data[[clusters_col]]
-  pseudo[[cc]]$cond.clusters <-
-    paste0(pseudo[[cc]]$timepoint, "_", clusters_data)
-}
-for (n in c("A", "M6", "NC", "C")) {
-  Idents(pseudo[[n]]) <- "cond.clusters"
-  cluster_names[[n]] <- unique(clusters_data)
-  freqs[[n]] = table(Idents(pseudo[[n]]))
+  pseudo[[cc]]$cond.clusters <- paste0(pseudo[[cc]]$timepoint, "_", clusters_data)
+  Idents(pseudo[[cc]]) <- "cond.clusters"
+  cluster_names[[cc]] <- unique(as.character(clusters_data))
+  freqs[[cc]] <- table(Idents(pseudo[[cc]]))
 }
 ```
 
@@ -107,12 +113,18 @@ for (cc in c("NC", "C")) {
   identpfx.1[[cc]] <- "A_"
   identpfx.2[[cc]] <- "M6_"
 }
+
 for (n in c("A", "M6", "NC", "C")) {
   for (cluster in cluster_names[[n]]) {
     ident.1 <- paste0(identpfx.1[[n]], cluster)
     ident.2 <- paste0(identpfx.2[[n]], cluster)
-    results <- run_pb_deseq2(pseudo[[n]], so@misc$de_selgenes,
-                             ident.1, ident.2, freqs[[n]])
+    results <- run_pb_deseq2(
+      pseudo[[n]],
+      so@misc$de_selgenes,
+      ident.1,
+      ident.2,
+      freqs[[n]]
+    )
     so@misc$de[[n]]$all[[cluster]] <- results$all
     so@misc$de[[n]]$pval_filt[[cluster]] <- results$pval_filt
   }
@@ -120,26 +132,36 @@ for (n in c("A", "M6", "NC", "C")) {
 ```
 
 ```{r prepare_pseudobulk_total_cells}
-pseudo = list()
+pseudo <- list()
 for (tp in c("A", "M6")) {
-  pseudo[[tp]] <- AggregateExpression(subset_so[[tp]],
-                    assays = "RNA", return.seurat = TRUE,
-                    group.by = c("clinical_condition", "sample"))
+  pseudo[[tp]] <- AggregateExpression(
+    subset_so[[tp]],
+    assays = "RNA",
+    return.seurat = TRUE,
+    group.by = c("clinical_condition", "sample")
+  )
   Idents(pseudo[[tp]]) <- "clinical_condition"
 }
 for (cc in c("NC", "C")) {
-  pseudo[[cc]] <- AggregateExpression(subset_so[[cc]],
-                    assays = "RNA", return.seurat = TRUE,
-                    group.by = c("timepoint", "sample"))
+  pseudo[[cc]] <- AggregateExpression(
+    subset_so[[cc]],
+    assays = "RNA",
+    return.seurat = TRUE,
+    group.by = c("timepoint", "sample")
+  )
   Idents(pseudo[[cc]]) <- "timepoint"
 }
 ```
 
 ```{r run_de_total_cells}
-cluster = "Total"
+cluster <- "Total"
 for (tp in c("A", "M6")) {
-  results <- run_pb_deseq2(pseudo[[tp]], so@misc$de_selgenes,
-                           "Chronic", "Non-Chronic")
+  results <- run_pb_deseq2(
+    pseudo[[tp]],
+    so@misc$de_selgenes,
+    "Chronic",
+    "Non-Chronic"
+  )
   so@misc$de[[tp]]$all[[cluster]] <- results$all
   so@misc$de[[tp]]$pval_filt[[cluster]] <- results$pval_filt
 }
@@ -151,12 +173,11 @@ for (cc in c("NC", "C")) {
 ```
 
 ```{r save_results}
-saveRDS(so, paste0(var_dir, "so_w_deseq.rds"))
+saveRDS(so, paste0(var_dir, params$output_rds))
 ```
 
 # Session info
 
-```{r}
+```{r session_info}
 sessionInfo()
 ```
-

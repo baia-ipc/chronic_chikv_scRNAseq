@@ -1,5 +1,5 @@
 ---
-title: "`r paste('Chikv | Differential expression', c(A='Acute', M6='6-months', NC='Non-chronic', C='Chronic')[params$pair], c(A='Non-chronic vs Chronic', M6='Non-chronic vs Chronic', NC='Acute vs 6-months', C='Acute vs 6-months')[params$pair], sep=' | ')`"
+title: "`r paste('Chikv | Differential expression', c(A = 'Acute', M6 = '6-months', NC = 'Non-chronic', C = 'Chronic')[params$pair], c(A = 'Non-chronic vs Chronic', M6 = 'Non-chronic vs Chronic', NC = 'Acute vs 6-months', C = 'Acute vs 6-months')[params$pair], sep = ' | ')`"
 author: "Giorgio Gonnella"
 date: "`r Sys.Date()`"
 output:
@@ -10,79 +10,94 @@ params:
   input_step: "05.P.compute_de"
   input_rds: "so_w_deseq.rds"
   step: "05.V.de_results"
-  pair: "A"   # one of: A, M6, NC, C
+  pair: "A"
+  table_n: 20
+  fc_cutoff: 0.58
+  p_cutoff: 0.05
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(message=F, warning=F, echo=F)
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, echo = FALSE)
 withr::with_dir(here::here(), { source("renv/activate.R") })
-withr::with_dir(here::here(), { source("helpers/de_helpers.R") })
-withr::with_dir(here::here(), { source("helpers/de_viz_helpers.R") })
 
 library(Seurat)
-library(dplyr)
-require(data.table)
-library(EnhancedVolcano)
+library(baia.pseudobulk.deseq)
 library(rmdreportdeck)
-reportdeck_setup()
-knitr::opts_chunk$set(cache=F)
 
-analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
+rmdreportdeck::reportdeck_setup()
+knitr::opts_chunk$set(cache = FALSE)
+
+pair_configs <- list(
+  A = list(
+    lbl = "C_vs_NC",
+    sister = "M6",
+    positive_condition = "Chronic",
+    negative_condition = "Non-Chronic",
+    title = "Acute | Chronic vs Non-Chronic"
+  ),
+  M6 = list(
+    lbl = "C_vs_NC",
+    sister = "A",
+    positive_condition = "Chronic",
+    negative_condition = "Non-Chronic",
+    title = "6-months | Chronic vs Non-Chronic"
+  ),
+  NC = list(
+    lbl = "A_vs_6M",
+    sister = "C",
+    positive_condition = "A",
+    negative_condition = "M6",
+    title = "Non-Chronic | Acute vs 6-months"
+  ),
+  C = list(
+    lbl = "A_vs_6M",
+    sister = "NC",
+    positive_condition = "A",
+    negative_condition = "M6",
+    title = "Chronic | Acute vs 6-months"
+  )
+)
+
+if (!params$pair %in% names(pair_configs)) {
+  stop("Unknown pair: ", params$pair,
+       ". Must be one of: ", paste(names(pair_configs), collapse = ", "),
+       call. = FALSE)
+}
+
+cfg <- pair_configs[[params$pair]]
+n <- params$pair
+lbl <- cfg$lbl
+pfx <- paste0(n, ".", lbl)
+sister <- cfg$sister
+findmarkers_ident1 <- cfg$positive_condition
+findmarkers_ident2 <- cfg$negative_condition
+findmarkers_call <- paste0('FindMarkers(..., ident.1 = "', findmarkers_ident1,
+                           '", ident.2 = "', findmarkers_ident2, '")')
+
+analysis_root <- here::here(paste0("analysis-", params$analysis, "/"))
 
 input_step_dir <- paste0(analysis_root, "steps/", params$input_step, "/")
 input_var_dir <- paste0(input_step_dir, "results/vars/")
-if (!dir.exists(input_var_dir))
+if (!dir.exists(input_var_dir)) {
   stop("Input variable directory does not exist: ", input_var_dir)
+}
 
 this_step_dir <- paste0(analysis_root, "steps/", params$step, "/")
-if (!dir.exists(this_step_dir))
-  stop("Current step directory does not exist: ", this_step_dir)
+dir.create(this_step_dir, recursive = TRUE, showWarnings = FALSE)
 
-lbl_map    <- list(A = "C_vs_NC", M6 = "C_vs_NC", NC = "A_vs_6M", C = "A_vs_6M")
-sister_map <- list(A = "M6",     M6 = "A",       NC = "C",       C = "NC")
-if (!params$pair %in% names(lbl_map))
-  stop("Unknown pair: ", params$pair,
-       ". Must be one of: ", paste(names(lbl_map), collapse=", "))
-
-n      <- params$pair
-lbl    <- lbl_map[[n]]
-pfx    <- paste0(n, ".", lbl)   # e.g. "A.C_vs_NC"
-sister <- sister_map[[n]]
-contrast_groups <- strsplit(lbl, "_vs_")[[1]]
-findmarkers_ident1 <- list(A = "Chronic", M6 = "Chronic", NC = "A", C = "A")[[n]]
-findmarkers_ident2 <- list(A = "Non-Chronic", M6 = "Non-Chronic", NC = "M6", C = "M6")[[n]]
-findmarkers_call <- paste0('FindMarkers(..., ident.1 = "', findmarkers_ident1,
-                           '", ident.2 = "', findmarkers_ident2, '")')
-log2fc_positive_group <- findmarkers_ident1
-log2fc_negative_group <- findmarkers_ident2
-
-p_adj_filt_tsv_dir <- paste0(this_step_dir, "results/tables/p_adj_filt/")
-dir.create(p_adj_filt_tsv_dir, showWarnings = FALSE, recursive = TRUE)
-vulcano_outdir <- paste0(this_step_dir, "results/plots/vulcano/")
-dir.create(vulcano_outdir, recursive = TRUE, showWarnings = FALSE)
-
-strsanitize <- function(s) gsub(" ", "_", gsub("[^[:alnum:]]", "_", s))
-
-h <- function(level, text) writeLines(c("", paste0(strrep("#", level), " ", text), ""))
-
-deg_table_cols <- c("gene", "log2fc_group_1", "avg_expr_group_1",
-                    "log2fc_group_2", "avg_expr_group_2", "higher_in",
-                    "avg_log2FC", "pct.1", "pct.2", "p_val", "p_val_adj")
-deg_tsv_cols <- c("cmp", "ct", deg_table_cols)
-available_cols <- function(x, cols) cols[cols %in% colnames(x)]
-add_de_report_expression_cols <- function(x) {
-  if ("avg_log2expr_group_1" %in% colnames(x)) {
-    x$avg_expr_group_1 <- 2 ^ x$avg_log2expr_group_1
-  }
-  if ("avg_log2expr_group_2" %in% colnames(x)) {
-    x$avg_expr_group_2 <- 2 ^ x$avg_log2expr_group_2
-  }
-  x
-}
+tables_outdir <- paste0(this_step_dir, "results/tables/p_adj_filt/")
+plots_outdir <- paste0(this_step_dir, "results/plots/vulcano/")
+dir.create(tables_outdir, showWarnings = FALSE, recursive = TRUE)
+dir.create(plots_outdir, recursive = TRUE, showWarnings = FALSE)
 ```
 
 ```{r load_input_data}
 so <- readRDS(file = paste0(input_var_dir, params$input_rds))
+de <- so@misc$de[[n]]
+de_sister <- so@misc$de[[sister]]
+celltypes <- names(de$pval_filt)
+total_cts <- celltypes[celltypes == "Total"]
+plot_celltypes <- setdiff(celltypes, total_cts)
 ```
 
 # Goal
@@ -96,7 +111,8 @@ table caption {
 
 Visualize DESeq2 differential expression results for a given pairwise comparison as volcano plots
 and tables, one cell type at a time. Highlights significantly differentially expressed genes
-(adjusted p < 0.05, |log2FC| > 0.58) and collects cell types with no significant DEGs at the end.
+(adjusted p < `r params$p_cutoff`, |log2FC| > `r params$fc_cutoff`) and collects cell types with no
+significant DEGs at the end.
 
 For this report, the DE call is `r findmarkers_call`, which means that positive
 `avg_log2FC` values are higher in `r findmarkers_ident1` and negative `avg_log2FC`
@@ -106,8 +122,8 @@ same direction applies to the corresponding cell-type identities (for example,
 `r paste0(findmarkers_ident2, "_<cell type>")`).
 
 **Tables:** The asset-bar TSV download for each cell type contains all significant DEGs. The
-inline tables are shortened to the top 20 rows, sorted by adjusted p-value from smallest to
-largest. The average expression columns are shown on the expression scale, while
+inline tables are shortened to the top `r params$table_n` rows, sorted by adjusted p-value from
+smallest to largest. The average expression columns are shown on the expression scale, while
 `avg_log2FC` remains on the standard log2 fold-change scale.
 
 **Sister-group significant genes:** Each cell type section also provides a downloadable TSV of
@@ -115,242 +131,35 @@ genes that are significant in the sister group (`r sister`) for the same compari
 not reach significance here. This allows cross-referencing genes with consistent directional
 signal across both groups.
 
+```{r direction_counts, results='asis'}
+de_report_direction_counts_section(
+  de = de,
+  positive_condition = cfg$positive_condition,
+  negative_condition = cfg$negative_condition,
+  celltypes = plot_celltypes,
+  pfx = pfx,
+  plots_outdir = plots_outdir
+)
+```
+
 ```{r plots_and_tables, results='asis'}
-de          <- so@misc$de[[n]]
-de_sister   <- so@misc$de[[sister]]
-celltypes   <- names(de$pval_filt)
-total_cts   <- celltypes[celltypes == "Total"]
-celltypes   <- setdiff(celltypes, total_cts)
-no_deg_cts  <- character(0)
-fig_counter <- 0L
-table_n     <- 20L
-
-h(1, "Significant DEG counts")
-deg_count_plot <- de_direction_count_plot(
-  de$pval_filt,
-  positive_condition = log2fc_positive_group,
-  negative_condition = log2fc_negative_group,
+de_report_celltype_sections(
+  de = de,
+  de_sister = de_sister,
+  sister = sister,
+  pfx = pfx,
+  lbl = lbl,
   celltypes = celltypes,
-  title = paste0(pfx, " significant DEGs")
+  table_n = params$table_n,
+  plots_outdir = plots_outdir,
+  tables_outdir = tables_outdir,
+  fc_cutoff = params$fc_cutoff,
+  p_cutoff = params$p_cutoff
 )
-deg_count_bundle <- report_plot_bundle(
-  deg_count_plot,
-  block_prefix = paste0("DEGCounts.", pfx),
-  suffix = "direction_counts",
-  width = 8,
-  height = 5,
-  plot_dir = vulcano_outdir
-)
-cat(as.character(report_bundle_asset_bar(
-  report_figure_name(paste0("DEGCounts.", pfx), suffix = "direction_counts"),
-  deg_count_bundle,
-  png_label = "Download PNG",
-  pdf_label = "Download PDF"
-)), "\n")
-cat(
-  paste0('<img src="', deg_count_bundle$png_href, '" width="768" />'),
-  "\n\n"
-)
-
-get_sister_sig_table <- function(ct) {
-  cts <- strsanitize(ct)
-  sister_sig_ct <- de_sister$pval_filt[[ct]]
-  all_ct <- de$all[[ct]]
-
-  if (is.null(sister_sig_ct) || nrow(sister_sig_ct) == 0 ||
-      is.null(all_ct) || nrow(all_ct) == 0) {
-    return(NULL)
-  }
-
-  all_ct$gene <- rownames(all_ct)
-  all_ct <- add_de_report_expression_cols(all_ct)
-  sister_gene_order <- rownames(sister_sig_ct)[order(sister_sig_ct$p_val_adj)]
-  cross_data <- all_ct[match(sister_gene_order, all_ct$gene), , drop = FALSE]
-  cross_data <- cross_data[!is.na(cross_data$gene), , drop = FALSE]
-
-  if (nrow(cross_data) == 0) {
-    return(NULL)
-  }
-
-  cross_data <- cross_data[, available_cols(cross_data, deg_table_cols)]
-  table_caption <- paste0(pfx, " \u2014 ", ct, " \u2014 Significant in ", sister)
-  if (nrow(cross_data) > table_n) {
-    table_caption <- paste0(
-      table_caption,
-      " \u2014 Top ", table_n, " by sister-pair adjusted p-value"
-    )
-  }
-
-  list(
-    data = cross_data,
-    tsv_fname = paste0(pfx, ".", cts, ".sig_in_", sister, ".tsv"),
-    caption = table_caption,
-    suffix = paste0(cts, ".sig_in_", sister)
-  )
-}
-
-render_sister_sig_table <- function(ct, table_block_prefix, emit_total_subheader = FALSE) {
-  sister_table <- get_sister_sig_table(ct)
-  if (is.null(sister_table)) {
-    return(FALSE)
-  }
-
-  if (emit_total_subheader) {
-    h(2, paste0("Significant in ", sister))
-  }
-
-  cat(as.character(report_asset_bar(
-    report_table_name(table_block_prefix, sister_table$suffix),
-    report_download_link(paste0("Download TSV (sig. in ", sister, ")"),
-                         sister_table$tsv_fname,
-                         report_text_data_uri(report_tsv_text(sister_table$data)))
-  )), "\n")
-
-  print(knitr::kable(
-    format_de_display_table(head(sister_table$data, table_n)),
-    digits = 4,
-    caption = sister_table$caption,
-    row.names = FALSE,
-    escape = FALSE
-  ))
-
-  TRUE
-}
-
-render_deg_section <- function(ct, heading_level = 2L, heading_text = ct,
-                               emit_heading = TRUE, total_tables = FALSE) {
-  data_ct  <- de$pval_filt[[ct]]
-  cts      <- strsanitize(ct)
-  has_data <- !is.null(data_ct) && nrow(data_ct) > 0
-
-  # TSV
-  if (has_data) {
-    data_ct$cmp  <- lbl
-    data_ct$ct   <- ct
-    data_ct$gene <- rownames(data_ct)
-    data_ct <- add_de_report_expression_cols(data_ct)
-    fwrite(data_ct[, available_cols(data_ct, deg_tsv_cols)],
-           file = paste0(p_adj_filt_tsv_dir, pfx, ".", cts, ".tsv"),
-           sep = "\t", quote = FALSE)
-  }
-
-  if (!has_data) {
-    return(FALSE)
-  }
-
-  fig_counter <<- fig_counter + 1L
-
-  if (emit_heading) {
-    h(heading_level, heading_text)
-  }
-
-  png_path <- paste0(vulcano_outdir, pfx, ".", cts, ".png")
-  plt <- EnhancedVolcano(data_ct, lab = rownames(data_ct),
-                         x = 'avg_log2FC', y = 'p_val_adj',
-                         FCcutoff = 0.58, pCutoff = 0.05) +
-    ggtitle(paste0(n, " | ", lbl, " | ", ct))
-  figure_id <- paste0(fig_counter, ".", pfx)
-  plot_bundle <- report_plot_bundle(
-    plt,
-    block_prefix = figure_id,
-    suffix = cts,
-    width = 7,
-    height = 5,
-    plot_dir = vulcano_outdir
-  )
-  ggsave(png_path, plt, width=7, height=5)
-  cat(as.character(report_bundle_asset_bar(
-    report_figure_name(figure_id, suffix = cts),
-    plot_bundle,
-    png_label = "Download PNG",
-    pdf_label = "Download PDF"
-  )), "\n")
-  cat(
-    paste0(
-      '<img src="', plot_bundle$png_href, '" width="672" />'
-    ),
-    "\n\n"
-  )
-
-  table_data <- data_ct[order(data_ct$p_val_adj),
-                        available_cols(data_ct, deg_table_cols)]
-  table_caption <- paste0(pfx, " \u2014 ", ct)
-  if (nrow(table_data) > table_n) {
-    table_caption <- paste0(table_caption, " \u2014 Top ", table_n, " by adjusted p-value")
-  }
-
-  tsv_fname <- paste0(pfx, ".", cts, ".tsv")
-  if (total_tables) {
-    h(2, "Significant DEGs")
-  }
-  cat(as.character(report_asset_bar(
-    report_table_name(figure_id, cts),
-    report_download_link("Download TSV", tsv_fname,
-                         report_text_data_uri(report_tsv_text(table_data)))
-  )), "\n")
-
-  print(knitr::kable(
-    format_de_display_table(head(table_data, table_n)),
-    digits = 4,
-    caption = table_caption,
-    row.names = FALSE,
-    escape = FALSE
-  ))
-
-  render_sister_sig_table(ct, figure_id, emit_total_subheader = total_tables)
-  TRUE
-}
-
-h(1, "Total cells")
-if (length(total_cts) == 0) {
-  writeLines("Total cells were not present in the DE results.")
-} else {
-  for (ct in total_cts) {
-    if (!render_deg_section(ct, emit_heading = FALSE, total_tables = TRUE)) {
-      writeLines("No significant DEGs.")
-    }
-  }
-}
-
-h(1, "Cell types with significant DEGs")
-for (ct in celltypes) {
-  if (!render_deg_section(ct)) {
-    no_deg_cts <- c(no_deg_cts, ct)
-  }
-}
-
-h(1, paste0("Cell types with no significant DEGs in ", n,
-            " but significant DEGs in ", sister))
-no_deg_also_sister <- character(0)
-if (length(no_deg_cts) == 0) {
-  writeLines("None")
-} else {
-  no_sister_tables <- 0L
-  for (ct in no_deg_cts) {
-    if (!is.null(get_sister_sig_table(ct))) {
-      no_sister_tables <- no_sister_tables + 1L
-      h(2, ct)
-      render_sister_sig_table(ct, paste0("NoSig.", no_sister_tables, ".", pfx))
-    } else {
-      no_deg_also_sister <- c(no_deg_also_sister, ct)
-    }
-  }
-  if (no_sister_tables == 0L) {
-    writeLines("None")
-  }
-}
-
-h(1, paste0("Cell types with no significant DEGs in ", n, " and ", sister))
-if (length(no_deg_also_sister) == 0) {
-  writeLines("None")
-} else {
-  writeLines(paste0("- ", no_deg_also_sister))
-}
-
 ```
 
 # Session info
 
-```{r}
+```{r session_info}
 sessionInfo()
 ```

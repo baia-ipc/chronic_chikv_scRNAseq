@@ -13,12 +13,10 @@ SCRIPTS=analysis-1/steps/05.V.de_results/scripts
 OUTDIR=$(realpath analysis-1/steps/05.V.de_results/rundir)
 mkdir -p "$OUTDIR"
 
-# Create per-pair symlinks so knit2html produces distinctly named outputs
 for pair in "${PAIRS[@]}"; do
   ln -sf deseq_tables_and_vulcanos.Rmd "${SCRIPTS}/deseq_tables_and_vulcanos.${pair}.Rmd"
 done
 
-# Remove symlinks on exit (success or failure)
 cleanup() {
   for pair in "${PAIRS[@]}"; do
     rm -f "${SCRIPTS}/deseq_tables_and_vulcanos.${pair}.Rmd"
@@ -43,8 +41,8 @@ for i in "${!pids[@]}"; do
   if wait "${pids[$i]}"; then
     echo "$(date '+%F %T')  OK     pair=${PAIRS[$i]}"
   else
-    echo "$(date '+%F %T')  FAIL   pair=${PAIRS[$i]} — see ${OUTDIR}/deseq_tables_and_vulcanos.${PAIRS[$i]}.log"
-    failed=$((failed+1))
+    echo "$(date '+%F %T')  FAIL   pair=${PAIRS[$i]} - see ${OUTDIR}/deseq_tables_and_vulcanos.${PAIRS[$i]}.log"
+    failed=$((failed + 1))
   fi
 done
 
