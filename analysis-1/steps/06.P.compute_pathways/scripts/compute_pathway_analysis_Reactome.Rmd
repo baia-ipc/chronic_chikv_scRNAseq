@@ -24,6 +24,7 @@ library(fgsea)
 library(DOSE)
 library(ReactomePA)
 library(msigdbr)
+library(baia.pathway.analysis)
 require(org.Hs.eg.db)
 
 analysis_root <- here::here(paste0("analysis-", params$analysis,"/"))
@@ -42,8 +43,6 @@ if (!dir.exists(this_step_dir)) {
 var_dir <- paste0(this_step_dir, "results/vars/")
 dir.create(var_dir, showWarnings = FALSE, recursive = TRUE)
 
-helpers_dir <- here::here("helpers/")
-source(paste0(helpers_dir, "pathway_analysis_comp_helpers.R"))
 ```
 
 ```{r load_input_data}
@@ -102,4 +101,3 @@ saveRDS(so, paste0(var_dir, params$output_rds))
 ```{r}
 sessionInfo()
 ```
-

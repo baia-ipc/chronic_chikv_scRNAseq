@@ -20,6 +20,7 @@ library(ggplot2)
 library(clusterProfiler)
 library(enrichplot)
 library(rmdreportdeck)
+library(baia.pathway.analysis)
 reportdeck_setup()
 knitr::opts_chunk$set(cache=F)
 
@@ -38,10 +39,6 @@ if (!dir.exists(this_step_dir)) {
 
 results_dir <- paste0(this_step_dir, "results/")
 step_pfx    <- "V06-keggmaps"
-
-helpers_dir <- here::here("helpers/")
-source(paste0(helpers_dir, "pathway_analysis_viz_helpers.R"))
-source(paste0(helpers_dir, "pathway_analysis_comp_helpers.R"))
 ```
 
 # Goal
@@ -56,12 +53,6 @@ celltypes    <- c(unique(as.character(so$celltype)), "Total")
 cond_pairs   <- c("A", "M6", "NC", "C")
 cond_pairs_lbl <- c("A.C_vs_NC", "6M.C_vs_NC", "NC.A_vs_6M", "C.A_vs_6M")
 names(cond_pairs_lbl) <- cond_pairs
-```
-
-```{r strsanitize}
-strsanitize <- function(s) {
-  gsub(" ", "_", gsub("[^[:alnum:]]", "_", s))
-}
 ```
 
 ```{r results, results='asis', echo=F}
@@ -134,7 +125,7 @@ for (pair_idx in seq_along(cond_pairs)) {
 
   for (ct_idx in seq_along(celltypes)) {
     ct  <- celltypes[[ct_idx]]
-    cts <- strsanitize(ct)
+    cts <- baia.seurat.helpers::strsanitize(ct)
     ct_block_pfx <- make_section_block_pfx(step_pfx, pair_idx, "ORA", ct_idx, cts)
     map_items <- list()
 
@@ -174,7 +165,7 @@ for (pair_idx in seq_along(cond_pairs)) {
 
   for (ct_idx in seq_along(celltypes)) {
     ct  <- celltypes[[ct_idx]]
-    cts <- strsanitize(ct)
+    cts <- baia.seurat.helpers::strsanitize(ct)
     ct_block_pfx <- make_section_block_pfx(step_pfx, pair_idx, "GSEA", ct_idx, cts)
     map_items <- list()
 
