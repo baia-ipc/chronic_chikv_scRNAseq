@@ -18,8 +18,12 @@ old/
 analysis-1/results/
 analysis-1/steps/*/results/**
 
-# Cell Ranger derived links and prior analyses
+# Cell Ranger derived links, run outputs and reference (large / regenerable)
 cellranger/results/
+cellranger/rundir/
+cellranger/reference/
+cellranger/qc_output/
+cellranger/strand_analysis_out/
 
 # Submission bundles and supporting lab files
 geo-submission/

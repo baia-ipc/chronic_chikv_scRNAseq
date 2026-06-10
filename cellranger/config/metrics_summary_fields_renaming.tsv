@@ -1,0 +1,19 @@
+Estimated Number of Cells	EstNCells
+Mean Reads per Cell	MeanReadsCell
+Median Genes per Cell	MedGenesCell
+Number of Reads	NReads
+Valid Barcodes	ValidBcodes
+Sequencing Saturation	SeqSatur
+Q30 Bases in Barcode	Q30InBcode
+Q30 Bases in RNA Read	Q30InRNA
+Q30 Bases in UMI	Q30InUMI
+Reads Mapped to Genome	Mapped2Genome
+Reads Mapped Confidently to Genome	MappedConf2Genome
+Reads Mapped Confidently to Intergenic Regions	MappedConf2Interg
+Reads Mapped Confidently to Intronic Regions	MappedConf2Intron
+Reads Mapped Confidently to Exonic Regions	MappedConf2Exon
+Reads Mapped Confidently to Transcriptome	MappedConf2Transcr
+Reads Mapped Antisense to Gene	Mapped2Antisense
+Fraction Reads in Cells	FractionReadsCell
+Total Genes Detected	TotalGenes
+Median UMI Counts per Cell	MedUMICountCell
