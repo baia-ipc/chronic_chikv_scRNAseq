@@ -22,6 +22,7 @@ The repository currently has two main directories:
 |   |-- steps/           # numbered processing and visualization steps
 |   |-- scripts/         # analysis-level helper scripts
 |   `-- results/         # collected report/result links
+|-- analysis-2/          # Scripts of Lien de Caluwe'
 |-- scripts/             # project-level rendering helpers
 |-- renv/                # renv activation
 |-- DESCRIPTION          # R package dependencies
@@ -219,6 +220,13 @@ Collect selected result links under `analysis-1/results/`:
 bash analysis-1/scripts/collect_results.sh
 ```
 
+## Lien de Caluwe' analysis scripts
+
+Lien de Caluwe' (Immunology Unit, Institut Pasteur du Cambodge)
+first author of the submitted manuscript, performed some
+furhter analyses. Her scripts are contained in analysis-2.
+Please contact her for more information.
+
 ## Notes
 
 - The per-sample wrappers define the current sample list internally.
@@ -226,3 +234,4 @@ bash analysis-1/scripts/collect_results.sh
   run samples serially.
 - Intermediate objects are written under each step's `results/vars/`.
 - Linked HTML reports are written under each step's `rundir/`.
+
